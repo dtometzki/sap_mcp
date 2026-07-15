@@ -1,0 +1,18 @@
+# Dependencies & Build
+node_modules/
+dist/
+
+# Umgebungsvariablen (echte Werte, nie committen)
+.env
+.env.local
+
+# Diagnose-Mitschnitte: enthalten Bearer-Token, Cookies und Session-Traffic!
+diagnose-*.json
+
+# Session-State (falls lokal statt unter ~/.sap-notes-mcp abgelegt)
+session.json
+*.storage-state.json
+
+# OS / Editor
+.DS_Store
+*.log
