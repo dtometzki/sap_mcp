@@ -9,6 +9,8 @@
   },
   "scripts": {
     "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test dist/*.test.js",
     "login": "npm run build && node dist/login.js",
     "start": "node dist/server.js",
     "dev": "tsc --watch"

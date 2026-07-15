@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { chmod, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { loadConfig } from "./config.js";
@@ -21,8 +21,7 @@ import { SapSession } from "./session.js";
  *   npm run build
  *   node dist/diagnose-search.js "HANA Revision"
  *
- * Writes diagnose-coveo.json locally. Review it, then paste it back (the token is
- * short-lived, but redact it if you prefer — I mainly need the body/response shape).
+ * Writes diagnose-coveo.json locally with credentials redacted and owner-only permissions.
  */
 
 interface Rec {
@@ -37,93 +36,127 @@ interface Rec {
 const isCoveoSearch = (url: string): boolean =>
   /\.coveo\.com\/rest\/search/i.test(url);
 
+const SENSITIVE_HEADER_PATTERN = /^(authorization|cookie|set-cookie|proxy-authorization)$/i;
+
+function redactHeaders(headers: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers).map(([name, value]) => [
+      name,
+      SENSITIVE_HEADER_PATTERN.test(name) ? "[REDACTED]" : value,
+    ]),
+  );
+}
+
+function redactSecret(value: string, secret: string): string {
+  return secret ? value.replaceAll(secret, "[REDACTED]") : value;
+}
+
 async function main(): Promise<void> {
   const query = process.argv.slice(2).join(" ").trim() || "HANA Revision";
   const config = loadConfig();
   const session = new SapSession(config, false);
   await session.start();
-  const page = await session.newPage();
+  try {
+    const page = await session.newPage();
 
-  const coveo: Rec[] = [];
-  const allResponses: { url: string; body: string }[] = [];
+    const coveo: Rec[] = [];
+    const allResponses: { url: string; body: string }[] = [];
+    let bearer = "";
 
-  page.on("request", (req) => {
-    if (!isCoveoSearch(req.url())) return;
-    coveo.push({
-      kind: "request",
-      method: req.method(),
-      url: req.url(),
-      headers: req.headers(),
-      body: req.postData() ?? "",
-    });
-  });
-
-  page.on("response", async (response) => {
-    const req = response.request();
-    if (!["xhr", "fetch"].includes(req.resourceType())) return;
-    let body = "";
-    try {
-      body = await response.text();
-    } catch {
-      /* ignore */
-    }
-    allResponses.push({ url: response.url(), body });
-    if (isCoveoSearch(response.url())) {
+    page.on("request", (req) => {
+      if (!isCoveoSearch(req.url())) return;
+      const headers = req.headers();
+      bearer ||= (headers.authorization ?? "").replace(/^Bearer\s+/i, "").trim();
       coveo.push({
-        kind: "response",
+        kind: "request",
         method: req.method(),
-        url: response.url(),
-        status: response.status(),
-        headers: response.headers(),
-        body,
+        url: req.url(),
+        headers: redactHeaders(headers),
+        body: req.postData() ?? "",
       });
+    });
+
+    page.on("response", async (response) => {
+      const req = response.request();
+      if (!["xhr", "fetch"].includes(req.resourceType())) return;
+      let body = "";
+      try {
+        body = await response.text();
+      } catch {
+        /* ignore */
+      }
+      allResponses.push({ url: response.url(), body });
+      if (isCoveoSearch(response.url())) {
+        coveo.push({
+          kind: "response",
+          method: req.method(),
+          url: response.url(),
+          status: response.status(),
+          headers: redactHeaders(response.headers()),
+          body,
+        });
+      }
+    });
+
+    await page.goto("https://me.sap.com/", { waitUntil: "domcontentloaded" });
+
+    console.log("\n============================================================");
+    console.log("In the open browser window:");
+    console.log("  1. Sign in if needed.");
+    console.log("  2. Open the SAP Notes / Knowledge Base search.");
+    console.log(`  3. Search for:  ${query}  and let the results load.`);
+    console.log("Then press Enter here.");
+    console.log("============================================================\n");
+    const rl = createInterface({ input: stdin, output: stdout });
+    try {
+      await rl.question("Press Enter once results are visible... ");
+    } finally {
+      rl.close();
     }
-  });
 
-  await page.goto("https://me.sap.com/", { waitUntil: "domcontentloaded" });
+    // Hunt the token's origin in memory, but never persist the token itself.
+    const searchReq = coveo.find((r) => r.kind === "request");
 
-  console.log("\n============================================================");
-  console.log("In the open browser window:");
-  console.log("  1. Sign in if needed.");
-  console.log("  2. Open the SAP Notes / Knowledge Base search.");
-  console.log(`  3. Search for:  ${query}  and let the results load.`);
-  console.log("Then press Enter here.");
-  console.log("============================================================\n");
-  const rl = createInterface({ input: stdin, output: stdout });
-  await rl.question("Press Enter once results are visible... ");
-  rl.close();
+    const tokenOrigins = bearer
+      ? allResponses
+          .filter((r) => !isCoveoSearch(r.url) && r.body.includes(bearer))
+          .map((r) => ({ url: r.url, bodyPreview: r.body.slice(0, 800) }))
+      : [];
 
-  // Extract the bearer token from the Coveo request and hunt its origin.
-  const searchReq = coveo.find((r) => r.kind === "request");
-  const auth = searchReq?.headers["authorization"] ?? "";
-  const bearer = auth.replace(/^Bearer\s+/i, "").trim();
+    const report = {
+      query,
+      finalUrl: page.url(),
+      coveoTrafficCount: coveo.length,
+      coveo: coveo.map((record) => ({
+        ...record,
+        headers: redactHeaders(record.headers),
+        body: redactSecret(record.body, bearer),
+      })),
+      tokenPresent: Boolean(bearer),
+      tokenOrigins: tokenOrigins.map((origin) => ({
+        ...origin,
+        bodyPreview: redactSecret(origin.bodyPreview, bearer),
+      })),
+      allXhrUrls: [...new Set(allResponses.map((r) => r.url))],
+    };
+    const reportPath = "diagnose-coveo.json";
+    await writeFile(reportPath, JSON.stringify(report, null, 2), {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    await chmod(reportPath, 0o600);
 
-  const tokenOrigins = bearer
-    ? allResponses
-        .filter((r) => !isCoveoSearch(r.url) && r.body.includes(bearer))
-        .map((r) => ({ url: r.url, bodyPreview: r.body.slice(0, 800) }))
-    : [];
-
-  const report = {
-    query,
-    finalUrl: page.url(),
-    coveoTrafficCount: coveo.length,
-    coveo,
-    tokenPresent: Boolean(bearer),
-    tokenOrigins,
-    allXhrUrls: [...new Set(allResponses.map((r) => r.url))],
-  };
-  await writeFile("diagnose-coveo.json", JSON.stringify(report, null, 2), "utf8");
-
-  console.log(`\nCoveo requests/responses captured: ${coveo.length}`);
-  console.log(`Authorization token present: ${Boolean(bearer)}`);
-  console.log(`Token-issuing endpoints found: ${tokenOrigins.length}`);
-  for (const t of tokenOrigins.slice(0, 5)) console.log(`  <- ${t.url}`);
-  if (searchReq) {
-    console.log(`\nSearch request body (first 600 chars):\n${searchReq.body.slice(0, 600)}`);
+    console.log(`\nCoveo requests/responses captured: ${coveo.length}`);
+    console.log(`Authorization token present: ${Boolean(bearer)}`);
+    console.log(`Token-issuing endpoints found: ${tokenOrigins.length}`);
+    for (const t of tokenOrigins.slice(0, 5)) console.log(`  <- ${t.url}`);
+    if (searchReq) {
+      console.log(`\nSearch request body (first 600 chars):\n${searchReq.body.slice(0, 600)}`);
+    }
+    console.log("\nRedacted detail in diagnose-coveo.json (mode 0600)");
+  } finally {
+    await session.close();
   }
-  console.log("\nFull detail in diagnose-coveo.json");
-  await session.close();
 }
 
 main().catch((error: unknown) => {

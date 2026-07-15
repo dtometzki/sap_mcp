@@ -1,5 +1,6 @@
 import TurndownService from "turndown";
 import type { Page } from "playwright";
+import { z } from "zod";
 import { buildUrl, type Config } from "./config.js";
 import { SessionExpiredError, type SapSession } from "./session.js";
 
@@ -90,35 +91,73 @@ function coerceField(value: unknown): string {
 /** A result counts as a Note/KBA if it carries a numeric note id and a notes source/URI. */
 const NOTE_SOURCE_PATTERN = /sap-note|knowledge-base-article/i;
 
-interface CoveoResult {
-  title?: string;
-  clickUri?: string;
-  raw?: Record<string, unknown>;
+const CoveoResultSchema = z
+  .object({
+    title: z.string().optional(),
+    clickUri: z.string().optional(),
+    raw: z.record(z.unknown()).optional(),
+  })
+  .passthrough();
+
+const CoveoResponseSchema = z
+  .object({
+    results: z.array(CoveoResultSchema),
+    totalCount: z.number().int().nonnegative().optional(),
+  })
+  .passthrough();
+
+type CoveoResponse = z.infer<typeof CoveoResponseSchema>;
+
+/** Validate external API data so a Coveo schema change triggers the DOM fallback. */
+export function parseCoveoResponse(payload: unknown): CoveoResponse {
+  const parsed = CoveoResponseSchema.safeParse(payload);
+  if (!parsed.success) {
+    const summary = parsed.error.issues
+      .slice(0, 3)
+      .map((issue) => `${issue.path.join(".") || "response"}: ${issue.message}`)
+      .join("; ");
+    throw new Error(`Unexpected Coveo response schema (${summary})`);
+  }
+  return parsed.data;
 }
+
+const CoveoTokenSchema = z.object({ token: z.string().min(1) }).passthrough();
 
 async function fetchCoveoToken(session: SapSession, config: Config): Promise<string> {
   const response = await session
     .request()
     .get(config.coveoTokenUrl, { headers: { accept: "application/json" } });
 
-  if (!response.ok()) {
-    // A redirect to the identity provider means the stored session is no longer valid.
-    if ([401, 403].includes(response.status()) || /logon|signin|saml2/i.test(response.url())) {
-      throw new SessionExpiredError();
-    }
-    throw new Error(`Coveo token request failed: HTTP ${response.status()}`);
-  }
-
-  let payload: { token?: string };
   try {
-    payload = (await response.json()) as { token?: string };
-  } catch {
-    // HTML instead of JSON almost always means we were bounced to the login page.
-    throw new SessionExpiredError();
+    if (!response.ok()) {
+      // A redirect to the identity provider means the stored session is no longer valid.
+      if ([401, 403].includes(response.status()) || /logon|signin|saml2/i.test(response.url())) {
+        throw new SessionExpiredError();
+      }
+      throw new Error(`Coveo token request failed: HTTP ${response.status()}`);
+    }
+
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      const contentType = response.headers()["content-type"] ?? "";
+      if (/text\/html/i.test(contentType) || /logon|signin|saml2/i.test(response.url())) {
+        throw new SessionExpiredError();
+      }
+      throw new Error("Coveo token endpoint returned invalid JSON.");
+    }
+    const parsed = CoveoTokenSchema.safeParse(payload);
+    if (!parsed.success) throw new Error("Coveo token endpoint returned no valid token.");
+    return parsed.data.token;
+  } finally {
+    // APIResponse bodies otherwise remain in memory for the lifetime of the browser context.
+    await response.dispose().catch(() => undefined);
   }
-  if (!payload.token) throw new Error("Coveo token endpoint returned no token.");
-  return payload.token;
 }
+
+const COVEO_PAGE_SIZE = 50;
+const MAX_COVEO_PAGES = 3;
 
 async function searchNotesViaCoveo(
   session: SapSession,
@@ -127,44 +166,64 @@ async function searchNotesViaCoveo(
   limit: number,
 ): Promise<NoteHit[]> {
   const token = await fetchCoveoToken(session, config);
-
-  const response = await session.request().post(config.coveoSearchUrl, {
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    data: {
-      locale: "en-US",
-      q: query,
-      searchHub: config.coveoSearchHub,
-      tab: "All",
-      sortCriteria: "relevancy",
-      // Over-fetch: non-note results (blogs, docs) are filtered out below.
-      numberOfResults: Math.min(limit * 2, 50),
-      firstResult: 0,
-      fieldsToInclude: ["mh_id", "source", "mh_alt_url", "objecttype", "documenttype", "language"],
-    },
-  });
-
-  if (!response.ok()) throw new Error(`Coveo search failed: HTTP ${response.status()}`);
-  const body = (await response.json()) as { results?: CoveoResult[] };
-
   const hits = new Map<string, NoteHit>();
-  for (const result of body.results ?? []) {
-    const raw = result.raw ?? {};
-    const id = coerceField(raw.mh_id).trim();
-    if (!/^\d{4,10}$/.test(id) || hits.has(id)) continue;
 
-    const source = coerceField(raw.source);
-    const clickUri = result.clickUri ?? "";
-    const isNote = NOTE_SOURCE_PATTERN.test(source) || /\/sapnotes\/\d+/i.test(clickUri);
-    if (!isNote) continue;
+  for (let pageIndex = 0; pageIndex < MAX_COVEO_PAGES && hits.size < limit; pageIndex += 1) {
+    const firstResult = pageIndex * COVEO_PAGE_SIZE;
+    const response = await session.request().post(config.coveoSearchUrl, {
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      data: {
+        locale: "en-US",
+        q: query,
+        searchHub: config.coveoSearchHub,
+        tab: "All",
+        sortCriteria: "relevancy",
+        // Over-fetch and paginate because Coveo also returns blogs and documentation.
+        numberOfResults: COVEO_PAGE_SIZE,
+        firstResult,
+        fieldsToInclude: [
+          "mh_id",
+          "source",
+          "mh_alt_url",
+          "objecttype",
+          "documenttype",
+          "language",
+        ],
+      },
+    });
 
-    const title =
-      (result.title ?? "")
-        .replace(/\s*[-|]\s*SAP for Me\s*$/i, "")
-        .replace(/^\d{4,10}\s*[-–:]\s*/, "")
-        .trim() || `SAP Note ${id}`;
+    let body: CoveoResponse;
+    try {
+      if (!response.ok()) throw new Error(`Coveo search failed: HTTP ${response.status()}`);
+      body = parseCoveoResponse(await response.json());
+    } finally {
+      await response.dispose().catch(() => undefined);
+    }
 
-    hits.set(id, { id, title, url: buildUrl(config.noteUrlTemplate, { id }) });
-    if (hits.size >= limit) break;
+    for (const result of body.results) {
+      const raw = result.raw ?? {};
+      const id = coerceField(raw.mh_id).trim();
+      if (!/^\d{4,10}$/.test(id) || hits.has(id)) continue;
+
+      const source = coerceField(raw.source);
+      const clickUri = result.clickUri ?? "";
+      const isNote = NOTE_SOURCE_PATTERN.test(source) || /\/sapnotes\/\d+/i.test(clickUri);
+      if (!isNote) continue;
+
+      const title =
+        (result.title ?? "")
+          .replace(/\s*[-|]\s*SAP for Me\s*$/i, "")
+          .replace(/^\d{4,10}\s*[-–:]\s*/, "")
+          .trim() || `SAP Note ${id}`;
+
+      hits.set(id, { id, title, url: buildUrl(config.noteUrlTemplate, { id }) });
+      if (hits.size >= limit) break;
+    }
+
+    const exhaustedResults = body.results.length < COVEO_PAGE_SIZE;
+    const reachedTotal =
+      body.totalCount !== undefined && firstResult + body.results.length >= body.totalCount;
+    if (exhaustedResults || reachedTotal) break;
   }
   return [...hits.values()];
 }
