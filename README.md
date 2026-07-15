@@ -16,6 +16,7 @@ authentifizierten Browser-Session (Playwright):
 npm install
 npx playwright install chromium
 npm run build
+npm test               # Offline-Unit-Tests, keine SAP-Session erforderlich
 npm run login          # sichtbarer Browser: S-User + MFA, dann Enter im Terminal
 npm start              # optionaler Smoke-Test (stdio, wartet auf MCP-Client)
 ```
@@ -50,9 +51,14 @@ Keine Credentials in der Config nötig — der Server nutzt ausschliesslich die 
 |---|---|---|
 | `SAP_STATE_PATH` | `~/.sap-notes-mcp/session.json` | Ablage der Session |
 | `SAP_SEARCH_URL` | `https://me.sap.com/search?q={query}&tab=notes` | Such-URL (`{query}`) |
+| `SAP_COVEO_ORG` | `sapamericaproductiontyfzmfz0` | Coveo-Organisation |
+| `SAP_COVEO_TOKEN_URL` | SAP-for-Me-Token-Endpunkt | Endpunkt für kurzlebige Such-Token |
+| `SAP_COVEO_SEARCH_URL` | Coveo REST Search v2 | Such-Endpunkt inkl. Organisation |
+| `SAP_COVEO_SEARCH_HUB` | `SAP for Me` | Coveo Search Hub / Pipeline-Kontext |
 | `SAP_NOTE_URL` | `https://me.sap.com/notes/{id}` | Detail-URL (`{id}`) |
 | `SAP_PROBE_URL` | `https://me.sap.com/notes/2170696` | Seite zur Session-Prüfung |
 | `SAP_NAV_TIMEOUT_MS` | `60000` | Navigations-Timeout |
+| `SAP_NETWORK_IDLE_TIMEOUT_MS` | `4000` | Kurze Wartezeit auf Netzwerk-Ruhe |
 | `SAP_RENDER_SETTLE_MS` | `2500` | Wartezeit für spätes SPA-Rendering |
 | `SAP_USERNAME` | – | Nur optionales Username-Prefill im Login-CLI (Passwort wird nie aus ENV gelesen) |
 
@@ -71,6 +77,20 @@ Der Server benutzt bewusst **keine** hartkodierten CSS-Klassen:
 * Nur für die **eigene** Nutzung mit dem **eigenen** S-User gedacht. Ein zentral gehosteter
   Server mit Technik-S-User verteilt faktisch lizenzierte Portalinhalte weiter — das ist
   vorab mit den SAP-Nutzungsbedingungen abzugleichen.
-* Kein Bulk-Crawling: ein Seitenaufruf pro Tool-Call, keine Parallelisierung.
+* Kein Bulk-Crawling: Tool-Aufrufe werden pro Serverprozess serialisiert. Die Suche liest
+  höchstens drei Coveo-Ergebnisseiten, bis das angeforderte Trefferlimit erreicht ist.
 * Korrekturanweisungen (ABAP) werden nicht ausgelesen; dafür wäre ein zusätzlicher
   OData-Call gegen den Note-Assistant-Service nötig.
+
+## Entwicklung und Diagnose
+
+```bash
+npm run typecheck
+npm test
+node dist/test-search.js "HANA Revision"       # benötigt eine gültige Session
+node dist/diagnose-search.js "HANA Revision"   # interaktiv
+```
+
+Das Diagnose-Skript entfernt Zugangstoken und Cookie-Header vor dem Schreiben und legt
+`diagnose-coveo.json` mit Dateimodus `0600` ab. Der Mitschnitt kann dennoch geschützte
+SAP-Suchergebnisse enthalten und sollte nicht weitergegeben oder committed werden.

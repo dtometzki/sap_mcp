@@ -18,6 +18,21 @@ function ensureSession(): Promise<void> {
   return session.start();
 }
 
+/**
+ * SAP calls share one authenticated browser context and are deliberately serialized.
+ * This keeps concurrent MCP clients from creating request bursts against the portal.
+ */
+let requestQueue: Promise<void> = Promise.resolve();
+
+function runSerialized<T>(operation: () => Promise<T>): Promise<T> {
+  const result = requestQueue.then(operation);
+  requestQueue = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
 function toErrorText(error: unknown): string {
   if (error instanceof SessionExpiredError) return error.message;
   if (error instanceof Error) return `SAP portal request failed: ${error.message}`;
@@ -34,14 +49,16 @@ server.registerTool(
       "Full-text search for SAP Notes and Knowledge Base Articles in the authenticated SAP " +
       "support portal. Returns note numbers, titles and URLs. Use sap_note_get for the content.",
     inputSchema: {
-      query: z.string().min(2).describe("Search terms, e.g. 'HANA backup failed error 447'"),
+      query: z.string().trim().min(2).describe("Search terms, e.g. 'HANA backup failed error 447'"),
       limit: z.number().int().min(1).max(MAX_RESULTS).default(10),
     },
   },
   async ({ query, limit }) => {
     try {
-      await ensureSession();
-      const hits = await searchNotes(session, config, query, limit);
+      const hits = await runSerialized(async () => {
+        await ensureSession();
+        return searchNotes(session, config, query, limit);
+      });
       if (hits.length === 0) {
         return { content: [{ type: "text", text: `No notes found for: ${query}` }] };
       }
@@ -66,8 +83,10 @@ server.registerTool(
   },
   async ({ number }) => {
     try {
-      await ensureSession();
-      const note = await fetchNote(session, config, number);
+      const note = await runSerialized(async () => {
+        await ensureSession();
+        return fetchNote(session, config, number);
+      });
       const text = `# ${note.id} — ${note.title}\n\nSource: ${note.url}\n\n${note.markdown}`;
       return { content: [{ type: "text", text }] };
     } catch (error) {
@@ -77,11 +96,14 @@ server.registerTool(
 );
 
 const SHUTDOWN_TIMEOUT_MS = 5_000;
+let isShuttingDown = false;
 
 async function shutdown(): Promise<void> {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
   // Do not let a hanging browser close keep the process alive forever.
   await Promise.race([
-    session.close().catch(() => undefined),
+    requestQueue.then(() => session.close()).catch(() => undefined),
     new Promise((resolve) => setTimeout(resolve, SHUTDOWN_TIMEOUT_MS)),
   ]);
   process.exit(0);

@@ -22,6 +22,14 @@ export class SessionExpiredError extends Error {
 /** Markers that indicate the portal bounced us to the identity provider. */
 const LOGIN_URL_MARKERS = ["accounts.sap.com", "/saml2/", "/oauth2/", "signin", "logon"];
 
+/** Login forms are sometimes rendered at the original portal URL without a redirect. */
+const LOGIN_FORM_SELECTOR = [
+  "input[type='password']",
+  "form[action*='login' i]",
+  "form[action*='signin' i]",
+  "form[action*='saml' i]",
+].join(", ");
+
 export function looksLikeLoginPage(url: string): boolean {
   const lower = url.toLowerCase();
   return LOGIN_URL_MARKERS.some((marker) => lower.includes(marker));
@@ -97,7 +105,13 @@ export class SapSession {
 
     const page = await this.context.newPage();
     try {
-      await page.goto(url, { waitUntil: "domcontentloaded" });
+      const response = await page.goto(url, { waitUntil: "domcontentloaded" });
+      if (response?.status() === 401) {
+        throw new SessionExpiredError();
+      }
+      if (response?.status() === 403) {
+        throw new Error("SAP portal denied access to the requested page (HTTP 403).");
+      }
       await page
         .waitForLoadState("networkidle", { timeout: this.config.networkIdleTimeoutMs })
         .catch(() => {
@@ -106,8 +120,12 @@ export class SapSession {
         });
       await page.waitForTimeout(this.config.renderSettleMs);
 
-      if (looksLikeLoginPage(page.url())) {
-        await page.close();
+      const hasVisibleLoginForm = await page
+        .locator(LOGIN_FORM_SELECTOR)
+        .first()
+        .isVisible()
+        .catch(() => false);
+      if (looksLikeLoginPage(page.url()) || hasVisibleLoginForm) {
         throw new SessionExpiredError();
       }
       return page;
@@ -154,10 +172,23 @@ export class SapSession {
   }
 
   async close(): Promise<void> {
-    await this.context?.close();
-    await this.browser?.close();
+    const context = this.context;
+    const browser = this.browser;
     this.context = undefined;
     this.browser = undefined;
     this.startPromise = undefined;
+
+    let closeError: unknown;
+    try {
+      await context?.close();
+    } catch (error) {
+      closeError = error;
+    }
+    try {
+      await browser?.close();
+    } catch (error) {
+      closeError ??= error;
+    }
+    if (closeError) throw closeError;
   }
 }
