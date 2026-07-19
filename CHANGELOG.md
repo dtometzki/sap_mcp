@@ -7,6 +7,20 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Hinzugefügt
+
+- `sap_session_status`-Tool für proaktive Session-Prüfung
+- Coveo-Token wird 4 min gecacht (ein Roundtrip weniger pro Suche)
+- Retry bei transienten Coveo-Fehlern (1 s Verzögerung)
+
+### Geändert
+
+- Server-Version wird aus `package.json` gelesen statt hartcodiert
+- `waitForSelector` statt blindem `waitForTimeout` → schnellere Seitenladezeiten
+- Graceful Shutdown über `server.close()` statt `process.exit(0)`
+- README: `--env-file`-Nutzung dokumentiert
+- `coerceField` exportiert und getestet
+
 ## [1.1.0] – 2026-07-19
 
 ### Hinzugefügt
