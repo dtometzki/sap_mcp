@@ -25,6 +25,29 @@ npm run login          # sichtbarer Browser: S-User + MFA, dann Enter im Termina
 npm start              # optionaler Smoke-Test (stdio, wartet auf MCP-Client)
 ```
 
+### ENV-Variablen laden (optional)
+
+Ab Node 20.6 können ENV-Variablen aus einer `.env`-Datei geladen werden (ohne
+zusätzliches Dependency):
+
+```bash
+cp .env.example .env   # Werte anpassen
+node --env-file=.env dist/server.js
+```
+
+Alternativ in der MCP-Client-Config:
+
+```json
+{
+  "mcpServers": {
+    "sap-notes": {
+      "command": "node",
+      "args": ["--env-file=.env", "/absoluter/pfad/sap-notes-mcp/dist/server.js"]
+    }
+  }
+}
+```
+
 ## Einbindung in Claude Desktop / Claude Code
 
 `claude_desktop_config.json` bzw. `.mcp.json`:
@@ -48,6 +71,7 @@ Keine Credentials in der Config nötig — der Server nutzt ausschliesslich die 
 |---|---|---|
 | `sap_notes_search` | `query` (string), `limit` (1–25, default 10) | Note-Nummer, Titel, URL je Treffer |
 | `sap_note_get` | `number` (4–10 Ziffern) | Vollständiger Note-Inhalt als Markdown |
+| `sap_session_status` | – | Ob die gespeicherte Session noch gültig ist |
 
 ## Konfiguration (ENV, alles optional)
 

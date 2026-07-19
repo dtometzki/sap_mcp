@@ -123,7 +123,13 @@ export class SapSession {
           // The portal keeps polling connections open; a timeout here is expected
           // and harmless as long as the DOM is already rendered.
         });
-      await page.waitForTimeout(this.config.renderSettleMs);
+      // Wait for a plausible content container instead of a blind sleep; proceeds
+      // immediately once the SPA renders, falls back to the timeout otherwise.
+      await page
+        .waitForSelector("main, article, [role='main'], .sapMPage, #content", {
+          timeout: this.config.renderSettleMs,
+        })
+        .catch(() => undefined);
 
       const hasVisibleLoginForm = await page
         .locator(LOGIN_FORM_SELECTOR)

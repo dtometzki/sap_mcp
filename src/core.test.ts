@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildUrl } from "./config.js";
-import { extractNoteId, mapCoveoResult, parseCoveoResponse } from "./notes.js";
+import { coerceField, extractNoteId, mapCoveoResult, parseCoveoResponse } from "./notes.js";
 import { looksLikeLoginPage } from "./session.js";
 
 test("buildUrl encodes values and replaces repeated placeholders", () => {
@@ -114,4 +114,16 @@ test("mapCoveoResult falls back to a generated title", () => {
     NOTE_URL_TEMPLATE,
   );
   assert.equal(hit?.title, "SAP Note 1234567");
+});
+
+test("coerceField normalizes scalars, arrays, and edge cases", () => {
+  assert.equal(coerceField("hello"), "hello");
+  assert.equal(coerceField(42), "42");
+  assert.equal(coerceField(true), "true");
+  assert.equal(coerceField(["single"]), "single");
+  assert.equal(coerceField([123]), "123");
+  assert.equal(coerceField([]), "");
+  assert.equal(coerceField(null), "");
+  assert.equal(coerceField(undefined), "");
+  assert.equal(coerceField({ nested: true }), "");
 });

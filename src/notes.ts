@@ -4,6 +4,19 @@ import { z } from "zod";
 import { buildUrl, type Config } from "./config.js";
 import { SessionExpiredError, type SapSession } from "./session.js";
 
+/** Retry once after a short delay on transient errors (network, 5xx). */
+async function withRetry<T>(fn: () => Promise<T>, retries = 1, delayMs = 1_000): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (error instanceof SessionExpiredError) throw error;
+      if (attempt >= retries) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
 export interface NoteHit {
   id: string;
   title: string;
@@ -83,7 +96,7 @@ export async function searchNotes(
 }
 
 /** Coveo returns fields as either a scalar or a single-element array; normalise to a string. */
-function coerceField(value: unknown): string {
+export function coerceField(value: unknown): string {
   if (Array.isArray(value)) return value.length > 0 ? coerceField(value[0]) : "";
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
@@ -154,7 +167,13 @@ export function mapCoveoResult(
 
 const CoveoTokenSchema = z.object({ token: z.string().min(1) }).passthrough();
 
+/** Coveo tokens are short-lived; cache to avoid a roundtrip on every search. */
+const TOKEN_TTL_MS = 4 * 60_000;
+let cachedToken: { value: string; expiresAt: number } | undefined;
+
 async function fetchCoveoToken(session: SapSession, config: Config): Promise<string> {
+  if (cachedToken && Date.now() < cachedToken.expiresAt) return cachedToken.value;
+
   const response = await session
     .request()
     .get(config.coveoTokenUrl, { headers: { accept: "application/json" } });
@@ -163,6 +182,7 @@ async function fetchCoveoToken(session: SapSession, config: Config): Promise<str
     if (!response.ok()) {
       // A redirect to the identity provider means the stored session is no longer valid.
       if ([401, 403].includes(response.status()) || /logon|signin|saml2/i.test(response.url())) {
+        cachedToken = undefined;
         throw new SessionExpiredError();
       }
       throw new Error(`Coveo token request failed: HTTP ${response.status()}`);
@@ -174,12 +194,14 @@ async function fetchCoveoToken(session: SapSession, config: Config): Promise<str
     } catch {
       const contentType = response.headers()["content-type"] ?? "";
       if (/text\/html/i.test(contentType) || /logon|signin|saml2/i.test(response.url())) {
+        cachedToken = undefined;
         throw new SessionExpiredError();
       }
       throw new Error("Coveo token endpoint returned invalid JSON.");
     }
     const parsed = CoveoTokenSchema.safeParse(payload);
     if (!parsed.success) throw new Error("Coveo token endpoint returned no valid token.");
+    cachedToken = { value: parsed.data.token, expiresAt: Date.now() + TOKEN_TTL_MS };
     return parsed.data.token;
   } finally {
     // APIResponse bodies otherwise remain in memory for the lifetime of the browser context.
@@ -196,40 +218,41 @@ async function searchNotesViaCoveo(
   query: string,
   limit: number,
 ): Promise<NoteHit[]> {
-  const token = await fetchCoveoToken(session, config);
+  const token = await withRetry(() => fetchCoveoToken(session, config));
   const hits = new Map<string, NoteHit>();
 
   for (let pageIndex = 0; pageIndex < MAX_COVEO_PAGES && hits.size < limit; pageIndex += 1) {
     const firstResult = pageIndex * COVEO_PAGE_SIZE;
-    const response = await session.request().post(config.coveoSearchUrl, {
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      data: {
-        locale: "en-US",
-        q: query,
-        searchHub: config.coveoSearchHub,
-        tab: "All",
-        sortCriteria: "relevancy",
-        // Over-fetch and paginate because Coveo also returns blogs and documentation.
-        numberOfResults: COVEO_PAGE_SIZE,
-        firstResult,
-        fieldsToInclude: [
-          "mh_id",
-          "source",
-          "mh_alt_url",
-          "objecttype",
-          "documenttype",
-          "language",
-        ],
-      },
-    });
+    const body = await withRetry(async () => {
+      const response = await session.request().post(config.coveoSearchUrl, {
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        data: {
+          locale: "en-US",
+          q: query,
+          searchHub: config.coveoSearchHub,
+          tab: "All",
+          sortCriteria: "relevancy",
+          // Over-fetch and paginate because Coveo also returns blogs and documentation.
+          numberOfResults: COVEO_PAGE_SIZE,
+          firstResult,
+          fieldsToInclude: [
+            "mh_id",
+            "source",
+            "mh_alt_url",
+            "objecttype",
+            "documenttype",
+            "language",
+          ],
+        },
+      });
 
-    let body: CoveoResponse;
-    try {
-      if (!response.ok()) throw new Error(`Coveo search failed: HTTP ${response.status()}`);
-      body = parseCoveoResponse(await response.json());
-    } finally {
-      await response.dispose().catch(() => undefined);
-    }
+      try {
+        if (!response.ok()) throw new Error(`Coveo search failed: HTTP ${response.status()}`);
+        return parseCoveoResponse(await response.json());
+      } finally {
+        await response.dispose().catch(() => undefined);
+      }
+    });
 
     for (const result of body.results) {
       const hit = mapCoveoResult(result, config.noteUrlTemplate);

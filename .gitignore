@@ -16,3 +16,6 @@ session.json
 # OS / Editor
 .DS_Store
 *.log
+
+# Stale git lock artifacts
+_to_delete/

@@ -1,9 +1,13 @@
+import { createRequire } from "node:module";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { loadConfig } from "./config.js";
 import { SapSession, SessionExpiredError } from "./session.js";
 import { fetchNote, searchNotes } from "./notes.js";
+
+const require = createRequire(import.meta.url);
+const { version: pkgVersion } = require("../package.json") as { version: string };
 
 const MAX_RESULTS = 25;
 
@@ -85,7 +89,7 @@ function toErrorText(error: unknown): string {
   return "SAP portal request failed with an unknown error.";
 }
 
-const server = new McpServer({ name: "sap-notes", version: "1.0.0" });
+const server = new McpServer({ name: "sap-notes", version: pkgVersion });
 
 server.registerTool(
   "sap_notes_search",
@@ -151,6 +155,34 @@ server.registerTool(
   },
 );
 
+server.registerTool(
+  "sap_session_status",
+  {
+    title: "SAP Session Status",
+    description:
+      "Check whether the stored SAP session is still authenticated. " +
+      "Use this to proactively detect an expired session before running searches.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const authenticated = await runSerialized(async () => {
+        await ensureSession();
+        return session.isAuthenticated();
+      });
+      const text = authenticated
+        ? "SAP session is valid and authenticated."
+        : "SAP session is expired. Run `npm run login` to re-authenticate.";
+      return { content: [{ type: "text", text }] };
+    } catch (error) {
+      await recoverFromError(error);
+      return { isError: true, content: [{ type: "text", text: toErrorText(error) }] };
+    } finally {
+      scheduleIdleClose();
+    }
+  },
+);
+
 const SHUTDOWN_TIMEOUT_MS = 5_000;
 let isShuttingDown = false;
 
@@ -158,12 +190,13 @@ async function shutdown(): Promise<void> {
   if (isShuttingDown) return;
   isShuttingDown = true;
   if (idleTimer) clearTimeout(idleTimer);
+  // Close the MCP transport first so no new requests arrive.
+  await server.close().catch(() => undefined);
   // Do not let a hanging browser close keep the process alive forever.
   await Promise.race([
     requestQueue.then(() => session.close()).catch(() => undefined),
     new Promise((resolve) => setTimeout(resolve, SHUTDOWN_TIMEOUT_MS)),
   ]);
-  process.exit(0);
 }
 
 process.on("SIGINT", () => void shutdown());
