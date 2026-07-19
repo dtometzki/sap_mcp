@@ -30,18 +30,23 @@ export interface Config {
   networkIdleTimeoutMs: number;
   /** Extra settle time after network idle, for late client-side rendering. */
   renderSettleMs: number;
+  /**
+   * Close the headless browser after this many milliseconds without a tool call
+   * (frees ~200 MB RAM); the next call relaunches it lazily. 0 disables.
+   */
+  idleTimeoutMs: number;
   /** Only used by the interactive login CLI to prefill the username field, never by the server. */
   username: string | undefined;
 }
 
 const DEFAULT_STATE_PATH = join(homedir(), ".sap-notes-mcp", "session.json");
 
-function intFromEnv(name: string, fallback: number): number {
+function intFromEnv(name: string, fallback: number, minimum = 1): number {
   const raw = process.env[name];
   if (raw === undefined) return fallback;
   const parsed = Number.parseInt(raw, 10);
-  if (Number.isNaN(parsed) || parsed <= 0) {
-    throw new Error(`${name} must be a positive integer, got: ${raw}`);
+  if (Number.isNaN(parsed) || parsed < minimum) {
+    throw new Error(`${name} must be an integer >= ${minimum}, got: ${raw}`);
   }
   return parsed;
 }
@@ -63,6 +68,7 @@ export function loadConfig(): Config {
     navigationTimeoutMs: intFromEnv("SAP_NAV_TIMEOUT_MS", 60_000),
     networkIdleTimeoutMs: intFromEnv("SAP_NETWORK_IDLE_TIMEOUT_MS", 4_000),
     renderSettleMs: intFromEnv("SAP_RENDER_SETTLE_MS", 2_500),
+    idleTimeoutMs: intFromEnv("SAP_IDLE_TIMEOUT_MS", 10 * 60_000, 0),
     username: process.env.SAP_USERNAME,
   };
 }

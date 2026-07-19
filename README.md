@@ -8,7 +8,11 @@ authentifizierten Browser-Session (Playwright):
 1. **Einmalig** interaktiv einloggen (`npm run login`) — inkl. MFA, im sichtbaren Browser.
 2. Session (Cookies + localStorage) wird nach `~/.sap-notes-mcp/session.json` (mode 0600) gespeichert.
 3. Der MCP-Server läuft danach **headless** und nutzt diese Session.
-4. Läuft die Session ab, liefern die Tools eine klare Fehlermeldung → `npm run login` erneut ausführen.
+4. Läuft die Session ab, liefern die Tools eine klare Fehlermeldung → `npm run login` erneut
+   ausführen und die Anfrage einfach wiederholen — der Server liest die neue Session ohne
+   Neustart ein.
+5. Nach längerer Inaktivität (Default 10 min) beendet der Server den headless Browser,
+   um RAM zu sparen; der nächste Tool-Aufruf startet ihn automatisch neu.
 
 ## Setup
 
@@ -60,6 +64,7 @@ Keine Credentials in der Config nötig — der Server nutzt ausschliesslich die 
 | `SAP_NAV_TIMEOUT_MS` | `60000` | Navigations-Timeout |
 | `SAP_NETWORK_IDLE_TIMEOUT_MS` | `4000` | Kurze Wartezeit auf Netzwerk-Ruhe |
 | `SAP_RENDER_SETTLE_MS` | `2500` | Wartezeit für spätes SPA-Rendering |
+| `SAP_IDLE_TIMEOUT_MS` | `600000` | Browser nach Inaktivität schließen (0 = deaktiviert) |
 | `SAP_USERNAME` | – | Nur optionales Username-Prefill im Login-CLI (Passwort wird nie aus ENV gelesen) |
 
 ## Wenn SAP das Portal umbaut
@@ -86,6 +91,7 @@ Der Server benutzt bewusst **keine** hartkodierten CSS-Klassen:
 
 ```bash
 npm run typecheck
+npm run lint
 npm test
 node dist/test-search.js "HANA Revision"       # benötigt eine gültige Session
 node dist/diagnose-search.js "HANA Revision"   # interaktiv
@@ -94,3 +100,6 @@ node dist/diagnose-search.js "HANA Revision"   # interaktiv
 Das Diagnose-Skript entfernt Zugangstoken und Cookie-Header vor dem Schreiben und legt
 `diagnose-coveo.json` mit Dateimodus `0600` ab. Der Mitschnitt kann dennoch geschützte
 SAP-Suchergebnisse enthalten und sollte nicht weitergegeben oder committed werden.
+
+Lint (typescript-eslint, type-aware) und die Offline-Tests laufen zusätzlich in der CI
+(`.github/workflows/ci.yml`) bei jedem Push/PR — ohne SAP-Session und ohne Browser.

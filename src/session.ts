@@ -13,7 +13,8 @@ export class SessionExpiredError extends Error {
   constructor() {
     super(
       "SAP session is missing or expired. Run `npm run login` on the machine hosting " +
-        "this MCP server to sign in interactively (S-user + MFA), then retry.",
+        "this MCP server to sign in interactively (S-user + MFA), then simply retry " +
+        "the tool call — the server picks up the new session without a restart.",
     );
     this.name = "SessionExpiredError";
   }
@@ -33,6 +34,10 @@ const LOGIN_FORM_SELECTOR = [
 export function looksLikeLoginPage(url: string): boolean {
   const lower = url.toLowerCase();
   return LOGIN_URL_MARKERS.some((marker) => lower.includes(marker));
+}
+
+function toError(value: unknown): Error {
+  return value instanceof Error ? value : new Error("Browser close failed", { cause: value });
 }
 
 async function fileExists(path: string): Promise<boolean> {
@@ -178,16 +183,16 @@ export class SapSession {
     this.browser = undefined;
     this.startPromise = undefined;
 
-    let closeError: unknown;
+    let closeError: Error | undefined;
     try {
       await context?.close();
     } catch (error) {
-      closeError = error;
+      closeError = toError(error);
     }
     try {
       await browser?.close();
     } catch (error) {
-      closeError ??= error;
+      closeError ??= toError(error);
     }
     if (closeError) throw closeError;
   }

@@ -84,8 +84,10 @@ export async function searchNotes(
 
 /** Coveo returns fields as either a scalar or a single-element array; normalise to a string. */
 function coerceField(value: unknown): string {
-  if (Array.isArray(value)) return value.length > 0 ? String(value[0]) : "";
-  return value === undefined || value === null ? "" : String(value);
+  if (Array.isArray(value)) return value.length > 0 ? coerceField(value[0]) : "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "";
 }
 
 /** A result counts as a Note/KBA if it carries a numeric note id and a notes source/URI. */
@@ -119,6 +121,35 @@ export function parseCoveoResponse(payload: unknown): CoveoResponse {
     throw new Error(`Unexpected Coveo response schema (${summary})`);
   }
   return parsed.data;
+}
+
+export type CoveoResult = z.infer<typeof CoveoResultSchema>;
+
+/**
+ * Maps a single Coveo result to a NoteHit, or undefined when the result is not a
+ * Note/KBA (Coveo also returns blogs and documentation). Pure so the mapping — the
+ * part most likely to break when SAP renames fields — is unit-testable offline.
+ */
+export function mapCoveoResult(
+  result: CoveoResult,
+  noteUrlTemplate: string,
+): NoteHit | undefined {
+  const raw = result.raw ?? {};
+  const id = coerceField(raw.mh_id).trim();
+  if (!/^\d{4,10}$/.test(id)) return undefined;
+
+  const source = coerceField(raw.source);
+  const clickUri = result.clickUri ?? "";
+  const isNote = NOTE_SOURCE_PATTERN.test(source) || /\/sapnotes\/\d+/i.test(clickUri);
+  if (!isNote) return undefined;
+
+  const title =
+    (result.title ?? "")
+      .replace(/\s*[-|]\s*SAP for Me\s*$/i, "")
+      .replace(/^\d{4,10}\s*[-–:]\s*/, "")
+      .trim() || `SAP Note ${id}`;
+
+  return { id, title, url: buildUrl(noteUrlTemplate, { id }) };
 }
 
 const CoveoTokenSchema = z.object({ token: z.string().min(1) }).passthrough();
@@ -201,23 +232,20 @@ async function searchNotesViaCoveo(
     }
 
     for (const result of body.results) {
-      const raw = result.raw ?? {};
-      const id = coerceField(raw.mh_id).trim();
-      if (!/^\d{4,10}$/.test(id) || hits.has(id)) continue;
-
-      const source = coerceField(raw.source);
-      const clickUri = result.clickUri ?? "";
-      const isNote = NOTE_SOURCE_PATTERN.test(source) || /\/sapnotes\/\d+/i.test(clickUri);
-      if (!isNote) continue;
-
-      const title =
-        (result.title ?? "")
-          .replace(/\s*[-|]\s*SAP for Me\s*$/i, "")
-          .replace(/^\d{4,10}\s*[-–:]\s*/, "")
-          .trim() || `SAP Note ${id}`;
-
-      hits.set(id, { id, title, url: buildUrl(config.noteUrlTemplate, { id }) });
+      const hit = mapCoveoResult(result, config.noteUrlTemplate);
+      if (!hit || hits.has(hit.id)) continue;
+      hits.set(hit.id, hit);
       if (hits.size >= limit) break;
+    }
+
+    // A full first page with zero surviving hits almost always means Coveo renamed
+    // the source/id fields, not "no results" — surface that instead of failing silently.
+    if (pageIndex === 0 && hits.size === 0 && body.results.length > 0) {
+      console.error(
+        `Coveo returned ${body.results.length} results for "${query}" but none matched ` +
+          "the Note/KBA filter — the 'source'/'mh_id' field naming may have changed " +
+          "(see mapCoveoResult in notes.ts).",
+      );
     }
 
     const exhaustedResults = body.results.length < COVEO_PAGE_SIZE;

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildUrl } from "./config.js";
-import { extractNoteId, parseCoveoResponse } from "./notes.js";
+import { extractNoteId, mapCoveoResult, parseCoveoResponse } from "./notes.js";
 import { looksLikeLoginPage } from "./session.js";
 
 test("buildUrl encodes values and replaces repeated placeholders", () => {
@@ -51,4 +51,67 @@ test("parseCoveoResponse rejects silent schema changes", () => {
 test("looksLikeLoginPage recognizes common identity-provider URLs", () => {
   assert.equal(looksLikeLoginPage("https://accounts.sap.com/saml2/idp/sso"), true);
   assert.equal(looksLikeLoginPage("https://me.sap.com/notes/2170696"), false);
+});
+
+const NOTE_URL_TEMPLATE = "https://me.sap.com/notes/{id}";
+
+test("mapCoveoResult maps a Note result and cleans the title", () => {
+  const hit = mapCoveoResult(
+    {
+      title: "1234567 - Example note title - SAP for Me",
+      clickUri: "https://launchpad.support.sap.com/#/notes/1234567",
+      raw: { mh_id: "1234567", source: ["SAP-Note"] },
+    },
+    NOTE_URL_TEMPLATE,
+  );
+  assert.deepEqual(hit, {
+    id: "1234567",
+    title: "Example note title",
+    url: "https://me.sap.com/notes/1234567",
+  });
+});
+
+test("mapCoveoResult accepts KBA sources and sapnotes clickUris", () => {
+  assert.equal(
+    mapCoveoResult(
+      { title: "A KBA", raw: { mh_id: "7654321", source: "Knowledge-Base-Article" } },
+      NOTE_URL_TEMPLATE,
+    )?.id,
+    "7654321",
+  );
+  assert.equal(
+    mapCoveoResult(
+      {
+        title: "Via clickUri",
+        clickUri: "https://me.sap.com/sapnotes/246810",
+        raw: { mh_id: "246810", source: "Something-Else" },
+      },
+      NOTE_URL_TEMPLATE,
+    )?.id,
+    "246810",
+  );
+});
+
+test("mapCoveoResult filters non-note results and missing ids", () => {
+  // Blog post: has an id but the wrong source and no notes clickUri.
+  assert.equal(
+    mapCoveoResult(
+      { title: "A blog post", raw: { mh_id: "1234567", source: "SAP-Blog" } },
+      NOTE_URL_TEMPLATE,
+    ),
+    undefined,
+  );
+  // Documentation: no numeric note id at all.
+  assert.equal(
+    mapCoveoResult({ title: "Docs", raw: { source: "SAP-Note" } }, NOTE_URL_TEMPLATE),
+    undefined,
+  );
+});
+
+test("mapCoveoResult falls back to a generated title", () => {
+  const hit = mapCoveoResult(
+    { title: "", raw: { mh_id: "1234567", source: "SAP-Note" } },
+    NOTE_URL_TEMPLATE,
+  );
+  assert.equal(hit?.title, "SAP Note 1234567");
 });
