@@ -102,4 +102,4 @@ Das Diagnose-Skript entfernt Zugangstoken und Cookie-Header vor dem Schreiben un
 SAP-Suchergebnisse enthalten und sollte nicht weitergegeben oder committed werden.
 
 Lint (typescript-eslint, type-aware) und die Offline-Tests laufen zusätzlich in der CI
-(`.github/workflows/ci.yml`) bei jedem Push/PR — ohne SAP-Session und ohne Browser.
+(`.github/workflows/ci-workflow.yml`) bei jedem Push/PR — ohne SAP-Session und ohne Browser.
