@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildUrl } from "./config.js";
-import { coerceField, extractNoteId, mapCoveoResult, parseCoveoResponse } from "./notes.js";
+import {
+  coerceField,
+  extractNoteId,
+  isTransientError,
+  mapCoveoResult,
+  parseCoveoResponse,
+} from "./notes.js";
 import { looksLikeLoginPage } from "./session.js";
 
 test("buildUrl encodes values and replaces repeated placeholders", () => {
@@ -126,4 +132,15 @@ test("coerceField normalizes scalars, arrays, and edge cases", () => {
   assert.equal(coerceField(null), "");
   assert.equal(coerceField(undefined), "");
   assert.equal(coerceField({ nested: true }), "");
+});
+
+test("isTransientError retries 5xx and network errors, not 4xx or logic errors", () => {
+  assert.equal(isTransientError(new Error("Coveo search failed: HTTP 502")), true);
+  assert.equal(isTransientError(new Error("Coveo search failed: HTTP 503")), true);
+  assert.equal(isTransientError(new Error("net::ERR_CONNECTION_RESET")), true);
+  assert.equal(isTransientError(new Error("fetch failed")), true);
+  assert.equal(isTransientError(new Error("Coveo token request failed: HTTP 401")), false);
+  assert.equal(isTransientError(new Error("Coveo search failed: HTTP 400")), false);
+  assert.equal(isTransientError(new Error("Note 1234 returned no readable content")), false);
+  assert.equal(isTransientError("not an error"), false);
 });

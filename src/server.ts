@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { loadConfig } from "./config.js";
 import { SapSession, SessionExpiredError } from "./session.js";
-import { fetchNote, searchNotes } from "./notes.js";
+import { fetchNote, resetTokenCache, searchNotes } from "./notes.js";
 
 const require = createRequire(import.meta.url);
 const { version: pkgVersion } = require("../package.json") as { version: string };
@@ -79,6 +79,7 @@ function scheduleIdleClose(): void {
  */
 async function recoverFromError(error: unknown): Promise<void> {
   if (error instanceof SessionExpiredError) {
+    resetTokenCache();
     await runSerialized(() => session.close()).catch(() => undefined);
   }
 }
@@ -87,6 +88,36 @@ function toErrorText(error: unknown): string {
   if (error instanceof SessionExpiredError) return error.message;
   if (error instanceof Error) return `SAP portal request failed: ${error.message}`;
   return "SAP portal request failed with an unknown error.";
+}
+
+interface ToolResponse {
+  [key: string]: unknown;
+  content: { type: "text"; text: string }[];
+  isError?: boolean;
+}
+
+/**
+ * Shared wrapper for every tool call: serializes access, ensures the session,
+ * persists refreshed cookies, handles errors, and reschedules the idle timer.
+ */
+async function executeTool<T>(
+  operation: () => Promise<T>,
+  format: (result: T) => string,
+): Promise<ToolResponse> {
+  try {
+    const result = await runSerialized(async () => {
+      await ensureSession();
+      const value = await operation();
+      await persistSessionState();
+      return value;
+    });
+    return { content: [{ type: "text", text: format(result) }] };
+  } catch (error) {
+    await recoverFromError(error);
+    return { isError: true, content: [{ type: "text", text: toErrorText(error) }] };
+  } finally {
+    scheduleIdleClose();
+  }
 }
 
 const server = new McpServer({ name: "sap-notes", version: pkgVersion });
@@ -103,26 +134,14 @@ server.registerTool(
       limit: z.number().int().min(1).max(MAX_RESULTS).default(10),
     },
   },
-  async ({ query, limit }) => {
-    try {
-      const hits = await runSerialized(async () => {
-        await ensureSession();
-        const result = await searchNotes(session, config, query, limit);
-        await persistSessionState();
-        return result;
-      });
-      if (hits.length === 0) {
-        return { content: [{ type: "text", text: `No notes found for: ${query}` }] };
-      }
-      const text = hits.map((hit) => `${hit.id} — ${hit.title}\n${hit.url}`).join("\n\n");
-      return { content: [{ type: "text", text }] };
-    } catch (error) {
-      await recoverFromError(error);
-      return { isError: true, content: [{ type: "text", text: toErrorText(error) }] };
-    } finally {
-      scheduleIdleClose();
-    }
-  },
+  async ({ query, limit }) =>
+    executeTool(
+      () => searchNotes(session, config, query, limit),
+      (hits) =>
+        hits.length === 0
+          ? `No notes found for: ${query}`
+          : hits.map((hit) => `${hit.id} — ${hit.title}\n${hit.url}`).join("\n\n"),
+    ),
 );
 
 server.registerTool(
@@ -136,23 +155,11 @@ server.registerTool(
       number: z.string().regex(/^\d{4,10}$/, "Note number must be 4-10 digits"),
     },
   },
-  async ({ number }) => {
-    try {
-      const note = await runSerialized(async () => {
-        await ensureSession();
-        const result = await fetchNote(session, config, number);
-        await persistSessionState();
-        return result;
-      });
-      const text = `# ${note.id} — ${note.title}\n\nSource: ${note.url}\n\n${note.markdown}`;
-      return { content: [{ type: "text", text }] };
-    } catch (error) {
-      await recoverFromError(error);
-      return { isError: true, content: [{ type: "text", text: toErrorText(error) }] };
-    } finally {
-      scheduleIdleClose();
-    }
-  },
+  async ({ number }) =>
+    executeTool(
+      () => fetchNote(session, config, number),
+      (note) => `# ${note.id} — ${note.title}\n\nSource: ${note.url}\n\n${note.markdown}`,
+    ),
 );
 
 server.registerTool(
@@ -164,23 +171,14 @@ server.registerTool(
       "Use this to proactively detect an expired session before running searches.",
     inputSchema: {},
   },
-  async () => {
-    try {
-      const authenticated = await runSerialized(async () => {
-        await ensureSession();
-        return session.isAuthenticated();
-      });
-      const text = authenticated
-        ? "SAP session is valid and authenticated."
-        : "SAP session is expired. Run `npm run login` to re-authenticate.";
-      return { content: [{ type: "text", text }] };
-    } catch (error) {
-      await recoverFromError(error);
-      return { isError: true, content: [{ type: "text", text: toErrorText(error) }] };
-    } finally {
-      scheduleIdleClose();
-    }
-  },
+  async () =>
+    executeTool(
+      () => session.isAuthenticated(),
+      (authenticated) =>
+        authenticated
+          ? "SAP session is valid and authenticated."
+          : "SAP session is expired. Run `npm run login` to re-authenticate.",
+    ),
 );
 
 const SHUTDOWN_TIMEOUT_MS = 5_000;
@@ -190,6 +188,7 @@ async function shutdown(): Promise<void> {
   if (isShuttingDown) return;
   isShuttingDown = true;
   if (idleTimer) clearTimeout(idleTimer);
+  resetTokenCache();
   // Close the MCP transport first so no new requests arrive.
   await server.close().catch(() => undefined);
   // Do not let a hanging browser close keep the process alive forever.

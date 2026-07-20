@@ -4,6 +4,16 @@ import { z } from "zod";
 import { buildUrl, type Config } from "./config.js";
 import { SessionExpiredError, type SapSession } from "./session.js";
 
+/** Whether an error is transient (network / 5xx) and worth retrying. */
+export function isTransientError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const httpStatus = /HTTP (\d{3})/.exec(error.message)?.[1];
+  if (httpStatus) return Number(httpStatus) >= 500;
+  return /net::ERR_|ECONNRESET|ECONNREFUSED|ETIMEDOUT|socket hang up|fetch failed/i.test(
+    error.message,
+  );
+}
+
 /** Retry once after a short delay on transient errors (network, 5xx). */
 async function withRetry<T>(fn: () => Promise<T>, retries = 1, delayMs = 1_000): Promise<T> {
   for (let attempt = 0; ; attempt += 1) {
@@ -11,7 +21,7 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 1, delayMs = 1_000):
       return await fn();
     } catch (error) {
       if (error instanceof SessionExpiredError) throw error;
-      if (attempt >= retries) throw error;
+      if (attempt >= retries || !isTransientError(error)) throw error;
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
@@ -171,6 +181,11 @@ const CoveoTokenSchema = z.object({ token: z.string().min(1) }).passthrough();
 const TOKEN_TTL_MS = 4 * 60_000;
 let cachedToken: { value: string; expiresAt: number } | undefined;
 
+/** Drops the cached Coveo token; call when the underlying session changes or closes. */
+export function resetTokenCache(): void {
+  cachedToken = undefined;
+}
+
 async function fetchCoveoToken(session: SapSession, config: Config): Promise<string> {
   if (cachedToken && Date.now() < cachedToken.expiresAt) return cachedToken.value;
 
@@ -320,23 +335,25 @@ export async function fetchNote(
   id: string,
 ): Promise<NoteDetail> {
   const url = buildUrl(config.noteUrlTemplate, { id });
-  const page = await session.open(url);
-  try {
-    const html = await extractMainHtml(page);
-    const markdown = turndown.turndown(html).replace(/\n{3,}/g, "\n\n").trim();
+  return withRetry(async () => {
+    const page = await session.open(url);
+    try {
+      const html = await extractMainHtml(page);
+      const markdown = turndown.turndown(html).replace(/\n{3,}/g, "\n\n").trim();
 
-    if (markdown.length < 50) {
-      throw new Error(
-        `Note ${id} returned no readable content. The note may not exist, may be ` +
-          `restricted for your S-user, or the portal layout changed (adjust SAP_NOTE_URL).`,
-      );
+      if (markdown.length < 50) {
+        throw new Error(
+          `Note ${id} returned no readable content. The note may not exist, may be ` +
+            `restricted for your S-user, or the portal layout changed (adjust SAP_NOTE_URL).`,
+        );
+      }
+
+      const rawTitle = await page.title();
+      const title = rawTitle.replace(/\s*[-|]\s*SAP.*$/i, "").trim() || `SAP Note ${id}`;
+
+      return { id, title, url, markdown };
+    } finally {
+      await page.close();
     }
-
-    const rawTitle = await page.title();
-    const title = rawTitle.replace(/\s*[-|]\s*SAP.*$/i, "").trim() || `SAP Note ${id}`;
-
-    return { id, title, url, markdown };
-  } finally {
-    await page.close();
-  }
+  });
 }
