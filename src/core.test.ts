@@ -9,6 +9,13 @@ import {
   parseCoveoResponse,
 } from "./notes.js";
 import { looksLikeLoginPage } from "./session.js";
+import {
+  extractAttachments,
+  isAllowedAttachmentHost,
+  isTextAttachment,
+  sanitizeFileName,
+  selectAttachment,
+} from "./attachments.js";
 
 test("buildUrl encodes values and replaces repeated placeholders", () => {
   assert.equal(
@@ -143,4 +150,142 @@ test("isTransientError retries 5xx and network errors, not 4xx or logic errors",
   assert.equal(isTransientError(new Error("Coveo search failed: HTTP 400")), false);
   assert.equal(isTransientError(new Error("Note 1234 returned no readable content")), false);
   assert.equal(isTransientError("not an error"), false);
+});
+
+const DETAIL_API_BASE = "https://me.sap.com/backend/raw/sapnotes/Detail?q=3696257";
+
+test("extractAttachments reads the Attachments.Items shape with {value} wrappers", () => {
+  const attachments = extractAttachments(
+    {
+      Response: {
+        SAPNote: {
+          Title: { value: "3696257 - ECS Database pre-migration checks" },
+          Attachments: {
+            Items: [
+              {
+                Filename: { value: "ECS-PreMigration-param-fetch-Systemdb.txt" },
+                URL: { value: "/backend/raw/sapnotes/attachment/0003696257/abc123" },
+                FileSize: { value: "2048" },
+              },
+              {
+                Filename: { value: "ECS-PreMigration-param-fetch-Tenantdb.txt" },
+                URL: { value: "https://me.sap.com/backend/raw/sapnotes/attachment/def456" },
+              },
+            ],
+          },
+        },
+      },
+    },
+    DETAIL_API_BASE,
+  );
+
+  assert.deepEqual(attachments, [
+    {
+      fileName: "ECS-PreMigration-param-fetch-Systemdb.txt",
+      url: "https://me.sap.com/backend/raw/sapnotes/attachment/0003696257/abc123",
+      sizeBytes: 2048,
+    },
+    {
+      fileName: "ECS-PreMigration-param-fetch-Tenantdb.txt",
+      url: "https://me.sap.com/backend/raw/sapnotes/attachment/def456",
+    },
+  ]);
+});
+
+test("extractAttachments falls back to a whole-payload scan and skips non-files", () => {
+  const attachments = extractAttachments(
+    {
+      files: [
+        { fileName: "collection.sql", downloadUrl: "https://me.sap.com/dl/1" },
+        // A reference entry: name without file extension must not be picked up.
+        { name: "Related note about parameters", url: "https://me.sap.com/notes/3204909" },
+      ],
+    },
+    DETAIL_API_BASE,
+  );
+  assert.deepEqual(attachments, [
+    { fileName: "collection.sql", url: "https://me.sap.com/dl/1" },
+  ]);
+});
+
+test("extractAttachments prefers Attachments subtrees over incidental matches", () => {
+  const attachments = extractAttachments(
+    {
+      SideBar: { Name: "logo.png", Url: "https://me.sap.com/img/logo.png" },
+      Attachments: {
+        Items: [{ Filename: "real.txt", URL: "https://me.sap.com/dl/real" }],
+      },
+    },
+    DETAIL_API_BASE,
+  );
+  assert.deepEqual(attachments, [{ fileName: "real.txt", url: "https://me.sap.com/dl/real" }]);
+});
+
+test("extractAttachments returns [] for payloads without attachments", () => {
+  assert.deepEqual(extractAttachments({ Response: { SAPNote: {} } }, DETAIL_API_BASE), []);
+  assert.deepEqual(extractAttachments(null, DETAIL_API_BASE), []);
+  assert.deepEqual(extractAttachments("nope", DETAIL_API_BASE), []);
+});
+
+test("isAllowedAttachmentHost only allows https on sap.com hosts", () => {
+  assert.equal(isAllowedAttachmentHost("https://me.sap.com/backend/raw/x"), true);
+  assert.equal(isAllowedAttachmentHost("https://launchpad.support.sap.com/x"), true);
+  assert.equal(isAllowedAttachmentHost("https://sap.com/x"), true);
+  assert.equal(isAllowedAttachmentHost("https://evil.example.com/sap.com"), false);
+  assert.equal(isAllowedAttachmentHost("https://notsap.com/x"), false);
+  assert.equal(isAllowedAttachmentHost("http://me.sap.com/x"), false);
+  assert.equal(isAllowedAttachmentHost("not a url"), false);
+});
+
+test("sanitizeFileName prevents traversal and keeps names readable", () => {
+  assert.equal(sanitizeFileName("ECS-param-fetch.txt"), "ECS-param-fetch.txt");
+  // Path separators become underscores; the leftover dots are harmless without them.
+  assert.equal(sanitizeFileName("../../etc/passwd"), "_.._etc_passwd");
+  assert.equal(sanitizeFileName("dir\\file.txt"), "dir_file.txt");
+  assert.equal(sanitizeFileName(".hidden"), "hidden");
+  assert.equal(sanitizeFileName("  "), "attachment");
+  assert.equal(sanitizeFileName("a".repeat(300)).length, 200);
+});
+
+test("isTextAttachment recognizes text by content type and extension", () => {
+  assert.equal(isTextAttachment("script.txt", "text/plain"), true);
+  assert.equal(isTextAttachment("data.bin", "text/plain; charset=utf-8"), true);
+  assert.equal(isTextAttachment("collection.sql", "application/octet-stream"), true);
+  assert.equal(isTextAttachment("export.csv", ""), true);
+  assert.equal(isTextAttachment("archive.zip", "application/zip"), false);
+  assert.equal(isTextAttachment("sheet.xlsx", "application/octet-stream"), false);
+});
+
+const TWO_ATTACHMENTS = [
+  { fileName: "ECS-PreMigration-param-fetch-Systemdb.txt", url: "https://me.sap.com/dl/1" },
+  { fileName: "ECS-PreMigration-param-fetch-Tenantdb.txt", url: "https://me.sap.com/dl/2" },
+];
+
+test("selectAttachment matches exactly, by unique substring, and reports ambiguity", () => {
+  assert.equal(
+    selectAttachment(TWO_ATTACHMENTS, "3696257", "ecs-premigration-param-fetch-systemdb.txt").url,
+    "https://me.sap.com/dl/1",
+  );
+  assert.equal(
+    selectAttachment(TWO_ATTACHMENTS, "3696257", "Tenantdb").url,
+    "https://me.sap.com/dl/2",
+  );
+  assert.throws(
+    () => selectAttachment(TWO_ATTACHMENTS, "3696257", "param-fetch"),
+    /matches 2 attachments/,
+  );
+  assert.throws(
+    () => selectAttachment(TWO_ATTACHMENTS, "3696257", "does-not-exist.txt"),
+    /no attachment matching/,
+  );
+});
+
+test("selectAttachment handles the no-fileName and empty-list cases", () => {
+  const single = [TWO_ATTACHMENTS[0]!];
+  assert.equal(selectAttachment(single, "3696257", undefined).url, "https://me.sap.com/dl/1");
+  assert.throws(
+    () => selectAttachment(TWO_ATTACHMENTS, "3696257", undefined),
+    /pass fileName to pick one/,
+  );
+  assert.throws(() => selectAttachment([], "3696257", undefined), /new version is in preparation/);
 });

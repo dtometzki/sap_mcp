@@ -71,7 +71,14 @@ Keine Credentials in der Config nötig — der Server nutzt ausschliesslich die 
 |---|---|---|
 | `sap_notes_search` | `query` (string), `limit` (1–25, default 10) | Note-Nummer, Titel, URL je Treffer |
 | `sap_note_get` | `number` (4–10 Ziffern) | Vollständiger Note-Inhalt als Markdown |
+| `sap_note_attachments` | `number` (4–10 Ziffern) | Datei-Anhänge der Note (Name, Größe, Download-URL) |
+| `sap_note_attachment_get` | `number`, optional `fileName` | Lädt einen Anhang nach `SAP_ATTACHMENT_DIR` herunter; Text-Anhänge (.txt, .sql, .csv, …) zusätzlich inline |
 | `sap_session_status` | – | Ob die gespeicherte Session noch gültig ist |
+
+Hinweis zu Anhängen: Solange eine Note den Banner „A new version is in preparation“
+zeigt, blendet das Portal Anhänge portalweit aus (KBA 3453681) — die Liste ist dann
+leer, bis SAP die neue Version freigibt. `fileName` darf entfallen, wenn die Note genau
+einen Anhang hat; sonst genügt ein eindeutiger Teilstring (case-insensitive).
 
 ## Konfiguration (ENV, alles optional)
 
@@ -84,6 +91,8 @@ Keine Credentials in der Config nötig — der Server nutzt ausschliesslich die 
 | `SAP_COVEO_SEARCH_URL` | Coveo REST Search v2 | Such-Endpunkt inkl. Organisation |
 | `SAP_COVEO_SEARCH_HUB` | `SAP for Me` | Coveo Search Hub / Pipeline-Kontext |
 | `SAP_NOTE_URL` | `https://me.sap.com/notes/{id}` | Detail-URL (`{id}`) |
+| `SAP_NOTE_API_URL` | `https://me.sap.com/backend/raw/sapnotes/Detail?q={id}&t=E&isVTEnabled=false` | JSON-API hinter der Note-Seite; Quelle der Anhangsliste (`{id}`) |
+| `SAP_ATTACHMENT_DIR` | `~/Downloads/sap-notes` | Zielordner für Anhänge (ein Unterordner je Note-Nummer, `~` wird expandiert) |
 | `SAP_PROBE_URL` | `https://me.sap.com/notes/2170696` | Seite zur Session-Prüfung |
 | `SAP_NAV_TIMEOUT_MS` | `60000` | Navigations-Timeout |
 | `SAP_NETWORK_IDLE_TIMEOUT_MS` | `4000` | Kurze Wartezeit auf Netzwerk-Ruhe |
@@ -97,6 +106,9 @@ Der Server benutzt bewusst **keine** hartkodierten CSS-Klassen:
 
 * Suche = alle Links, deren `href` auf eine Note-Nummer zeigt (`/notes/<n>`, `/knowledge/en/<n>`, …).
 * Detail = grösster Content-Container (`main`, `article`, `[role=main]`, …) → Markdown.
+* Anhänge = Note-Detail-JSON-API zuerst; schlägt sie fehl, werden Anhang-Links
+  (`…attachment…`, `/documents/…`) aus der gerenderten Note-Seite gelesen.
+  Heruntergeladen wird ausschliesslich per HTTPS von `*.sap.com`-Hosts.
 
 Ändert SAP die Routen, genügt in der Regel ein Anpassen von `SAP_SEARCH_URL` / `SAP_NOTE_URL`
 (URL im Browser kopieren, Suchbegriff durch `{query}`, Nummer durch `{id}` ersetzen).

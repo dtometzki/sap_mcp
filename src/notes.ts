@@ -15,7 +15,7 @@ export function isTransientError(error: unknown): boolean {
 }
 
 /** Retry once after a short delay on transient errors (network, 5xx). */
-async function withRetry<T>(fn: () => Promise<T>, retries = 1, delayMs = 1_000): Promise<T> {
+export async function withRetry<T>(fn: () => Promise<T>, retries = 1, delayMs = 1_000): Promise<T> {
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await fn();

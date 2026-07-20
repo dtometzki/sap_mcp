@@ -19,6 +19,10 @@ export interface Config {
   coveoSearchHub: string;
   /** Detail page of a single note. {id} is replaced with the note number. */
   noteUrlTemplate: string;
+  /** JSON API behind the note detail page; source of the attachment list. {id} = note number. */
+  noteDetailApiUrlTemplate: string;
+  /** Directory attachments are downloaded to (one subfolder per note number). */
+  attachmentDirPath: string;
   /** URL used to verify that the stored session is still valid. */
   sessionProbeUrl: string;
   /** Milliseconds to wait for portal pages (SPA, slow backend). */
@@ -40,6 +44,12 @@ export interface Config {
 }
 
 const DEFAULT_STATE_PATH = join(homedir(), ".sap-notes-mcp", "session.json");
+const DEFAULT_ATTACHMENT_DIR = join(homedir(), "Downloads", "sap-notes");
+
+/** Expands a leading `~` so SAP_ATTACHMENT_DIR=~/Downloads works as users expect. */
+export function expandHomePath(path: string): string {
+  return path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : path;
+}
 
 function intFromEnv(name: string, fallback: number, minimum = 1): number {
   const raw = process.env[name];
@@ -64,6 +74,10 @@ export function loadConfig(): Config {
       `https://${coveoOrg}.org.coveo.com/rest/search/v2?organizationId=${coveoOrg}`,
     coveoSearchHub: process.env.SAP_COVEO_SEARCH_HUB ?? "SAP for Me",
     noteUrlTemplate: process.env.SAP_NOTE_URL ?? "https://me.sap.com/notes/{id}",
+    noteDetailApiUrlTemplate:
+      process.env.SAP_NOTE_API_URL ??
+      "https://me.sap.com/backend/raw/sapnotes/Detail?q={id}&t=E&isVTEnabled=false",
+    attachmentDirPath: expandHomePath(process.env.SAP_ATTACHMENT_DIR ?? DEFAULT_ATTACHMENT_DIR),
     sessionProbeUrl: process.env.SAP_PROBE_URL ?? "https://me.sap.com/notes/2170696",
     navigationTimeoutMs: intFromEnv("SAP_NAV_TIMEOUT_MS", 60_000),
     networkIdleTimeoutMs: intFromEnv("SAP_NETWORK_IDLE_TIMEOUT_MS", 4_000),

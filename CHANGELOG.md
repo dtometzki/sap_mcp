@@ -7,6 +7,24 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.3.0] – 2026-07-20
+
+### Hinzugefügt
+
+- `sap_note_attachments`-Tool: listet die Datei-Anhänge einer Note/KBA
+  (Dateiname, Größe, Download-URL) — primär über die Note-Detail-JSON-API
+  (`backend/raw/sapnotes/Detail`), mit DOM-Scrape der Note-Seite als Fallback
+  (gleiche Zwei-Stufen-Strategie wie die Suche)
+- `sap_note_attachment_get`-Tool: lädt einen Anhang nach `SAP_ATTACHMENT_DIR`
+  (Default `~/Downloads/sap-notes/<Note-Nummer>/`); Text-Anhänge
+  (.txt, .sql, .csv, …) werden zusätzlich inline zurückgegeben
+  (gekappt bei 200 000 Zeichen, die vollständige Datei liegt auf der Platte)
+- Neue ENV-Variablen `SAP_NOTE_API_URL` und `SAP_ATTACHMENT_DIR` (mit `~`-Expansion)
+- Sicherheit: Downloads nur per HTTPS von `*.sap.com`-Hosts (die URL stammt aus
+  Portaldaten); Dateinamen werden vor dem Speichern sanitisiert (kein Path-Traversal)
+- Leere Anhangsliste erklärt den „A new version is in preparation“-Modus,
+  in dem das Portal Anhänge ausblendet (KBA 3453681)
+
 ## [1.2.0] – 2026-07-20
 
 ### Hinzugefügt

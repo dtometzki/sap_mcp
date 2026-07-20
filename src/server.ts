@@ -5,6 +5,12 @@ import { z } from "zod";
 import { loadConfig } from "./config.js";
 import { SapSession, SessionExpiredError } from "./session.js";
 import { fetchNote, resetTokenCache, searchNotes } from "./notes.js";
+import {
+  downloadAttachment,
+  fetchAttachmentList,
+  type AttachmentDownload,
+  type NoteAttachment,
+} from "./attachments.js";
 
 const require = createRequire(import.meta.url);
 const { version: pkgVersion } = require("../package.json") as { version: string };
@@ -159,6 +165,80 @@ server.registerTool(
     executeTool(
       () => fetchNote(session, config, number),
       (note) => `# ${note.id} — ${note.title}\n\nSource: ${note.url}\n\n${note.markdown}`,
+    ),
+);
+
+const NOTE_NUMBER_SCHEMA = z.string().regex(/^\d{4,10}$/, "Note number must be 4-10 digits");
+
+function formatAttachmentList(number: string, attachments: NoteAttachment[]): string {
+  if (attachments.length === 0) {
+    return (
+      `Note ${number} lists no attachments. If the note shows "A new version is in ` +
+      `preparation", the portal hides attachments until the new version is released ` +
+      `(see KBA 3453681).`
+    );
+  }
+  const lines = attachments.map((attachment) => {
+    const size = attachment.sizeBytes !== undefined ? ` (${attachment.sizeBytes} bytes)` : "";
+    return `${attachment.fileName}${size}\n${attachment.url}`;
+  });
+  return `Note ${number} has ${attachments.length} attachment(s):\n\n${lines.join("\n\n")}`;
+}
+
+function formatAttachmentDownload(download: AttachmentDownload): string {
+  const type = download.contentType ? `, ${download.contentType}` : "";
+  const header = `Saved: ${download.filePath} (${download.bytes} bytes${type})`;
+  if (download.text === undefined) return header;
+  const truncated = download.textTruncated
+    ? `\n\n[Output truncated — the complete file is on disk at ${download.filePath}]`
+    : "";
+  return `${header}\n\n--- ${download.attachment.fileName} ---\n${download.text}${truncated}`;
+}
+
+server.registerTool(
+  "sap_note_attachments",
+  {
+    title: "List SAP Note Attachments",
+    description:
+      "List the file attachments of a SAP Note or KBA (file name, size, download URL). " +
+      "Use sap_note_attachment_get to download one. While a new note version is in " +
+      "preparation, the portal may hide attachments (KBA 3453681).",
+    inputSchema: {
+      number: NOTE_NUMBER_SCHEMA,
+    },
+  },
+  async ({ number }) =>
+    executeTool(
+      () => fetchAttachmentList(session, config, number),
+      (attachments) => formatAttachmentList(number, attachments),
+    ),
+);
+
+server.registerTool(
+  "sap_note_attachment_get",
+  {
+    title: "Download SAP Note Attachment",
+    description:
+      "Download one attachment of a SAP Note or KBA to disk " +
+      "(SAP_ATTACHMENT_DIR, default ~/Downloads/sap-notes/<note>/). " +
+      "Text attachments (.txt, .sql, .csv, ...) are additionally returned inline.",
+    inputSchema: {
+      number: NOTE_NUMBER_SCHEMA,
+      fileName: z
+        .string()
+        .trim()
+        .min(1)
+        .optional()
+        .describe(
+          "File name as listed by sap_note_attachments (case-insensitive, substring is " +
+            "enough if unique). May be omitted when the note has exactly one attachment.",
+        ),
+    },
+  },
+  async ({ number, fileName }) =>
+    executeTool(
+      () => downloadAttachment(session, config, number, fileName),
+      formatAttachmentDownload,
     ),
 );
 
