@@ -7,14 +7,25 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.2.0] – 2026-07-20
+
 ### Hinzugefügt
 
 - `sap_session_status`-Tool für proaktive Session-Prüfung
 - Coveo-Token wird 4 min gecacht (ein Roundtrip weniger pro Suche)
 - Retry bei transienten Coveo-Fehlern (1 s Verzögerung)
 
+### Behoben
+
+- Coveo-Token-Cache wird bei Session-Neustart invalidiert
+  (verhinderte Auth-Fehler nach Idle-Timeout oder Session-Ablauf)
+
 ### Geändert
 
+- Retry nur noch bei transienten Fehlern (5xx, Netzwerk) —
+  4xx und Logikfehler schlagen sofort fehl
+- `fetchNote` nutzt ebenfalls Retry (konsistent mit `searchNotes`)
+- Tool-Handler über gemeinsamen `executeTool`-Wrapper dedupliziert
 - Server-Version wird aus `package.json` gelesen statt hartcodiert
 - `waitForSelector` statt blindem `waitForTimeout` → schnellere Seitenladezeiten
 - Graceful Shutdown über `server.close()` statt `process.exit(0)`
