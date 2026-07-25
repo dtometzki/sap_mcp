@@ -7,6 +7,52 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.3.1] – 2026-07-25
+
+### Behoben
+
+- `fetchCoveoToken` nutzte noch die alte Login-Erkennung (`/logon|signin|saml2/` auf
+  die gesamte URL, 403 = Session-Ablauf) — dieselben zwei Fehler, die in 1.3.1 für
+  `attachments.ts` und `session.ts` behoben wurden. Ein 403 am Coveo-Token-Endpoint
+  führte in eine Login-Schleife; ein „logon" im Query-String riss die Session ab.
+  Jetzt: `assertNotLoggedOut` (gemeinsame Funktion in `session.ts`) und
+  `looksLikeLoginPage` statt Substring-Match.
+- `sap_session_status` überschrieb bei abgelaufener Session die gespeicherte
+  `session.json` mit dem toten Cookie-Jar: Die Prüfung meldet Ablauf per Rückgabewert
+  statt per Fehler, galt damit als erfolgreicher Aufruf und löste das periodische
+  Zurückschreiben aus. Wer nach `npm run login` „nur mal eben“ den Status prüfte,
+  zerstörte damit genau die frisch erzeugte Session. Der Status-Check schreibt jetzt
+  keinen State mehr und verwirft bei negativem Ergebnis den toten Browser-Kontext.
+- Falscher „Session abgelaufen“-Alarm bei den SAP-Vokabeln *logon* und *signin*:
+  Die Erkennung prüfte diese Substrings über die gesamte URL. Eine Suche nach
+  „SAP Logon“ (DOM-Fallback) und der Download einer Datei wie `saplogon.ini` galten
+  dadurch als Logout — inklusive Abbau des intakten Browsers und Aufforderung zum
+  Neu-Login. Geprüft wird jetzt Host und Pfad, nie der Query-String; beim Download
+  zusätzlich erst der HTTP-Status, dann die Heuristik (bisher schlug sie sogar bei
+  HTTP 200 zu).
+- HTTP 403 wird nicht mehr als Session-Ablauf behandelt. Fehlt dem S-User die
+  Berechtigung für eine Note, führte die alte Zuordnung in eine Login-Schleife, die
+  daran nichts ändern konnte. Neu: eigener `AccessDeniedError` mit klarer Meldung,
+  ohne Session-Abbau und ohne den sinnlosen DOM-Fallback. HTTP 401 bleibt Session-Ablauf.
+- `session.json` wird atomar geschrieben (Temp-Datei + `rename`, Modus 0600 ab Anlage).
+  Bisher konnte ein Prozessende während des 5-Minuten-Speicherns eine abgeschnittene
+  Datei hinterlassen; der Folgefehler war kein `SessionExpiredError`, der
+  Recovery-Pfad griff also nicht und jeder Aufruf schlug fehl, bis die Datei von Hand
+  gelöscht wurde. Eine unlesbare State-Datei gilt jetzt zusätzlich als „keine Session“
+  und führt zur normalen `npm run login`-Meldung.
+- Ein literales `%` im Dateinamen eines Anhangs (`100%_report.csv`) ließ
+  `decodeURIComponent` im DOM-Fallback werfen und brachte die komplette Anhangsliste
+  zum Scheitern. Der Dateiname wird jetzt aus dem Pfad gelesen (Query vorher entfernt)
+  und fällt bei nicht dekodierbaren Namen auf die Rohform zurück.
+
+### Hinzugefügt
+
+- Download-Schutz: Anhänge über 100 MB (`Content-Length`-Prüfung) werden abgelehnt,
+  bevor `response.body()` den gesamten Puffer in den RAM lädt.
+- Regressionstests: `assertNotLoggedOut` (401/403/IdP-URL/ok-Pfad),
+  `looksLikeLoginPage` gegen Suchanfragen und Anhang-URLs mit
+  „logon“/„signin“, sowie `fileNameFromHref` gegen fehlerhafte Prozent-Escapes.
+
 ## [1.3.0] – 2026-07-20
 
 ### Hinzugefügt

@@ -10,7 +10,8 @@ authentifizierten Browser-Session (Playwright):
 3. Der MCP-Server läuft danach **headless** und nutzt diese Session.
 4. Läuft die Session ab, liefern die Tools eine klare Fehlermeldung → `npm run login` erneut
    ausführen und die Anfrage einfach wiederholen — der Server liest die neue Session ohne
-   Neustart ein.
+   Neustart ein. Fehlt dem S-User dagegen nur die **Berechtigung** für eine bestimmte Note
+   (HTTP 403), wird das als solches gemeldet; ein erneuter Login ändert daran nichts.
 5. Nach längerer Inaktivität (Default 10 min) beendet der Server den headless Browser,
    um RAM zu sparen; der nächste Tool-Aufruf startet ihn automatisch neu.
 

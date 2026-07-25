@@ -1,7 +1,13 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buildUrl, type Config } from "./config.js";
-import { SessionExpiredError, type SapSession } from "./session.js";
+import {
+  AccessDeniedError,
+  SessionExpiredError,
+  assertNotLoggedOut,
+  looksLikeLoginPage,
+  type SapSession,
+} from "./session.js";
 import { coerceField, withRetry } from "./notes.js";
 
 export interface NoteAttachment {
@@ -22,6 +28,13 @@ export interface AttachmentDownload {
 
 /** Cap for inline text returned to the MCP client; the full file is always on disk. */
 export const INLINE_TEXT_LIMIT = 200_000;
+
+/**
+ * Reject downloads whose Content-Length exceeds this, so a multi-hundred-MB trace
+ * file cannot exhaust the process's RAM (response.body() buffers everything).
+ * The check is best-effort: servers may omit Content-Length (chunked encoding).
+ */
+export const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
 
 /**
  * Attachments may only be fetched from SAP-owned hosts. The download URL comes from
@@ -139,9 +152,7 @@ async function fetchAttachmentsViaApi(
       .request()
       .get(url, { headers: { accept: "application/json" } });
     try {
-      if ([401, 403].includes(response.status()) || /logon|signin|saml2/i.test(response.url())) {
-        throw new SessionExpiredError();
-      }
+      assertNotLoggedOut(response.status(), response.url(), `Note ${id}`, response.ok());
       if (!response.ok()) {
         throw new Error(`Note detail request failed: HTTP ${response.status()}`);
       }
@@ -149,8 +160,11 @@ async function fetchAttachmentsViaApi(
       try {
         payload = await response.json();
       } catch {
+        // HTML where JSON was expected: the portal served the login page with HTTP 200.
         const contentType = response.headers()["content-type"] ?? "";
-        if (/text\/html/i.test(contentType)) throw new SessionExpiredError();
+        if (/text\/html/i.test(contentType) || looksLikeLoginPage(response.url())) {
+          throw new SessionExpiredError();
+        }
         throw new Error("Note detail endpoint returned invalid JSON.");
       }
       return extractAttachments(payload, url);
@@ -162,6 +176,30 @@ async function fetchAttachmentsViaApi(
 
 /** Hrefs that plausibly point at a note attachment or document download. */
 const ATTACHMENT_HREF_PATTERN = /attachment|\/documents\//i;
+
+/**
+ * Last path segment of a URL as a readable file name.
+ *
+ * decodeURIComponent throws URIError on a lone or malformed percent escape — and a
+ * literal "%" in an attachment name (100%_report.csv) is not exotic. An exception here
+ * used to abort the whole listing, losing every other attachment of the note, so a
+ * name that cannot be decoded falls back to its raw form. The query string is removed
+ * before decoding, not after, so a "%" in the query cannot trip it either.
+ */
+export function fileNameFromHref(href: string): string {
+  let pathname: string;
+  try {
+    pathname = new URL(href).pathname;
+  } catch {
+    return "";
+  }
+  const last = pathname.split("/").pop() ?? "";
+  try {
+    return decodeURIComponent(last);
+  } catch {
+    return last;
+  }
+}
 
 /** Legacy fallback: scrape attachment-looking links from the rendered note page. */
 async function fetchAttachmentsViaDom(
@@ -181,7 +219,7 @@ async function fetchAttachmentsViaDom(
     for (const anchor of anchors) {
       if (!ATTACHMENT_HREF_PATTERN.test(anchor.href)) continue;
       if (!isAllowedAttachmentHost(anchor.href)) continue;
-      const fromHref = decodeURIComponent(anchor.href.split("/").pop() ?? "").split("?")[0] ?? "";
+      const fromHref = fileNameFromHref(anchor.href);
       const fileName = FILE_NAME_PATTERN.test(anchor.text) ? anchor.text : fromHref;
       if (!FILE_NAME_PATTERN.test(fileName) || found.has(anchor.href)) continue;
       found.set(anchor.href, { fileName, url: anchor.href });
@@ -205,7 +243,9 @@ export async function fetchAttachmentList(
   try {
     return await fetchAttachmentsViaApi(session, config, id);
   } catch (error) {
-    if (error instanceof SessionExpiredError) throw error;
+    // Both are definite answers from a working portal; the DOM scrape only exists for
+    // the case that the API moved, and would just repeat the same denial.
+    if (error instanceof SessionExpiredError || error instanceof AccessDeniedError) throw error;
     console.error(
       `Note detail API failed, falling back to DOM scrape: ${
         error instanceof Error ? error.message : String(error)
@@ -269,11 +309,21 @@ export async function downloadAttachment(
   return withRetry(async () => {
     const response = await session.request().get(attachment.url);
     try {
-      if ([401, 403].includes(response.status()) || /logon|signin|saml2/i.test(response.url())) {
-        throw new SessionExpiredError();
-      }
+      assertNotLoggedOut(
+        response.status(),
+        response.url(),
+        `"${attachment.fileName}"`,
+        response.ok(),
+      );
       if (!response.ok()) {
         throw new Error(`Attachment download failed: HTTP ${response.status()}`);
+      }
+      const contentLength = Number(response.headers()["content-length"]);
+      if (Number.isFinite(contentLength) && contentLength > MAX_DOWNLOAD_BYTES) {
+        throw new Error(
+          `"${attachment.fileName}" is ${contentLength} bytes — exceeds the ${MAX_DOWNLOAD_BYTES}-byte ` +
+            "inline limit. Download it directly from the URL listed by sap_note_attachments.",
+        );
       }
       const body = await response.body();
       const contentType = response.headers()["content-type"] ?? "";

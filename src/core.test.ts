@@ -8,9 +8,15 @@ import {
   mapCoveoResult,
   parseCoveoResponse,
 } from "./notes.js";
-import { looksLikeLoginPage } from "./session.js";
+import {
+  AccessDeniedError,
+  SessionExpiredError,
+  assertNotLoggedOut,
+  looksLikeLoginPage,
+} from "./session.js";
 import {
   extractAttachments,
+  fileNameFromHref,
   isAllowedAttachmentHost,
   isTextAttachment,
   sanitizeFileName,
@@ -64,6 +70,69 @@ test("parseCoveoResponse rejects silent schema changes", () => {
 test("looksLikeLoginPage recognizes common identity-provider URLs", () => {
   assert.equal(looksLikeLoginPage("https://accounts.sap.com/saml2/idp/sso"), true);
   assert.equal(looksLikeLoginPage("https://me.sap.com/notes/2170696"), false);
+  // Identity-provider paths on the portal host itself still count.
+  assert.equal(looksLikeLoginPage("https://me.sap.com/oauth2/authorize"), true);
+  assert.equal(looksLikeLoginPage("https://eu.accounts.sap.com/some/path"), true);
+  assert.equal(looksLikeLoginPage("not a url"), false);
+});
+
+test("looksLikeLoginPage does not fire on SAP vocabulary in the query string", () => {
+  // "logon" / "signin" are everyday SAP terms: a search for them must not be mistaken
+  // for a logout, which used to tear down a valid session.
+  assert.equal(
+    looksLikeLoginPage(buildUrl("https://me.sap.com/search?q={query}&tab=notes", {
+      query: "SAP Logon problem",
+    })),
+    false,
+  );
+  assert.equal(
+    looksLikeLoginPage("https://me.sap.com/search?q=single%20signin%20error&tab=notes"),
+    false,
+  );
+  // Same for attachment URLs that merely contain the word.
+  assert.equal(
+    looksLikeLoginPage("https://me.sap.com/backend/raw/sapnotes/attachment/1/saplogon.ini"),
+    false,
+  );
+});
+
+test("assertNotLoggedOut maps statuses to the right error types", () => {
+  // 401: session is gone.
+  assert.throws(
+    () => assertNotLoggedOut(401, "https://me.sap.com/x", "Note 123", false),
+    SessionExpiredError,
+  );
+  // 403: authenticated but not authorized — must NOT be SessionExpiredError.
+  assert.throws(
+    () => assertNotLoggedOut(403, "https://me.sap.com/x", "Note 123", false),
+    AccessDeniedError,
+  );
+  // Failed response that landed on the identity provider: session expired.
+  assert.throws(
+    () =>
+      assertNotLoggedOut(200, "https://accounts.sap.com/saml2/idp/sso", "Note 123", false),
+    SessionExpiredError,
+  );
+  // Successful response: never treated as a logout, even on an IdP-looking URL.
+  assert.doesNotThrow(() =>
+    assertNotLoggedOut(200, "https://accounts.sap.com/saml2/idp/sso", "Note 123", true),
+  );
+  // Non-ok but not a login page: caller handles the generic HTTP error.
+  assert.doesNotThrow(() =>
+    assertNotLoggedOut(500, "https://me.sap.com/backend/raw/x", "Note 123", false),
+  );
+});
+
+test("fileNameFromHref survives malformed percent escapes", () => {
+  assert.equal(
+    fileNameFromHref("https://me.sap.com/documents/ECS%20param%20fetch.txt"),
+    "ECS param fetch.txt",
+  );
+  // A literal "%" would make decodeURIComponent throw and used to kill the whole listing.
+  assert.equal(fileNameFromHref("https://me.sap.com/documents/100%_report.csv"), "100%_report.csv");
+  // The query string is stripped before decoding, not after.
+  assert.equal(fileNameFromHref("https://me.sap.com/dl/trace.log?token=100%25"), "trace.log");
+  assert.equal(fileNameFromHref("not a url"), "");
 });
 
 const NOTE_URL_TEMPLATE = "https://me.sap.com/notes/{id}";

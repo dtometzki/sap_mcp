@@ -2,7 +2,13 @@ import TurndownService from "turndown";
 import type { Page } from "playwright";
 import { z } from "zod";
 import { buildUrl, type Config } from "./config.js";
-import { SessionExpiredError, type SapSession } from "./session.js";
+import {
+  AccessDeniedError,
+  SessionExpiredError,
+  assertNotLoggedOut,
+  looksLikeLoginPage,
+  type SapSession,
+} from "./session.js";
 
 /** Whether an error is transient (network / 5xx) and worth retrying. */
 export function isTransientError(error: unknown): boolean {
@@ -20,7 +26,7 @@ export async function withRetry<T>(fn: () => Promise<T>, retries = 1, delayMs = 
     try {
       return await fn();
     } catch (error) {
-      if (error instanceof SessionExpiredError) throw error;
+      if (error instanceof SessionExpiredError || error instanceof AccessDeniedError) throw error;
       if (attempt >= retries || !isTransientError(error)) throw error;
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
@@ -95,7 +101,7 @@ export async function searchNotes(
   try {
     return await searchNotesViaCoveo(session, config, query, limit);
   } catch (error) {
-    if (error instanceof SessionExpiredError) throw error;
+    if (error instanceof SessionExpiredError || error instanceof AccessDeniedError) throw error;
     // Coveo (org id / token endpoint) may have changed; try the legacy scrape before giving up.
     // Log the original error to stderr (safe for stdio MCP) so it is not silently lost.
     console.error(
@@ -195,11 +201,8 @@ async function fetchCoveoToken(session: SapSession, config: Config): Promise<str
 
   try {
     if (!response.ok()) {
-      // A redirect to the identity provider means the stored session is no longer valid.
-      if ([401, 403].includes(response.status()) || /logon|signin|saml2/i.test(response.url())) {
-        cachedToken = undefined;
-        throw new SessionExpiredError();
-      }
+      cachedToken = undefined;
+      assertNotLoggedOut(response.status(), response.url(), "Coveo token endpoint", response.ok());
       throw new Error(`Coveo token request failed: HTTP ${response.status()}`);
     }
 
@@ -207,9 +210,9 @@ async function fetchCoveoToken(session: SapSession, config: Config): Promise<str
     try {
       payload = await response.json();
     } catch {
+      cachedToken = undefined;
       const contentType = response.headers()["content-type"] ?? "";
-      if (/text\/html/i.test(contentType) || /logon|signin|saml2/i.test(response.url())) {
-        cachedToken = undefined;
+      if (/text\/html/i.test(contentType) || looksLikeLoginPage(response.url())) {
         throw new SessionExpiredError();
       }
       throw new Error("Coveo token endpoint returned invalid JSON.");

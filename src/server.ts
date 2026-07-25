@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { loadConfig } from "./config.js";
-import { SapSession, SessionExpiredError } from "./session.js";
+import { AccessDeniedError, SapSession, SessionExpiredError } from "./session.js";
 import { fetchNote, resetTokenCache, searchNotes } from "./notes.js";
 import {
   downloadAttachment,
@@ -91,7 +91,10 @@ async function recoverFromError(error: unknown): Promise<void> {
 }
 
 function toErrorText(error: unknown): string {
-  if (error instanceof SessionExpiredError) return error.message;
+  // Both already carry a complete, actionable message; do not bury it behind a prefix.
+  if (error instanceof SessionExpiredError || error instanceof AccessDeniedError) {
+    return error.message;
+  }
   if (error instanceof Error) return `SAP portal request failed: ${error.message}`;
   return "SAP portal request failed with an unknown error.";
 }
@@ -102,6 +105,18 @@ interface ToolResponse {
   isError?: boolean;
 }
 
+interface ExecuteOptions {
+  /**
+   * Whether a successful call may write the browser's cookies back to session.json.
+   *
+   * Off for the status check: it reports an expired session by RETURNING false rather
+   * than throwing, so the call counts as successful and would persist the dead cookie
+   * jar — overwriting a session.json that `npm run login` had just refreshed in another
+   * terminal, i.e. destroying the very session the user ran the check to verify.
+   */
+  persistState?: boolean;
+}
+
 /**
  * Shared wrapper for every tool call: serializes access, ensures the session,
  * persists refreshed cookies, handles errors, and reschedules the idle timer.
@@ -109,12 +124,13 @@ interface ToolResponse {
 async function executeTool<T>(
   operation: () => Promise<T>,
   format: (result: T) => string,
+  { persistState = true }: ExecuteOptions = {},
 ): Promise<ToolResponse> {
   try {
     const result = await runSerialized(async () => {
       await ensureSession();
       const value = await operation();
-      await persistSessionState();
+      if (persistState) await persistSessionState();
       return value;
     });
     return { content: [{ type: "text", text: format(result) }] };
@@ -253,11 +269,23 @@ server.registerTool(
   },
   async () =>
     executeTool(
-      () => session.isAuthenticated(),
+      async () => {
+        const authenticated = await session.isAuthenticated();
+        if (!authenticated) {
+          // Drop the dead context here, because returning false is not an error and so
+          // never reaches recoverFromError. Without this the server would keep using the
+          // expired cookie jar instead of re-reading session.json on the next call.
+          resetTokenCache();
+          // Already inside the serialized queue — close directly, do not re-enqueue.
+          await session.close().catch(() => undefined);
+        }
+        return authenticated;
+      },
       (authenticated) =>
         authenticated
           ? "SAP session is valid and authenticated."
           : "SAP session is expired. Run `npm run login` to re-authenticate.",
+      { persistState: false },
     ),
 );
 
