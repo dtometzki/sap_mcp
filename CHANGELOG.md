@@ -7,6 +7,18 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.4.1] – 2026-07-31
+
+### Geändert
+
+- Ungenutzte Abhängigkeit `@openai/codex-security` entfernt (wurde nirgends
+  importiert, zog aber einen großen Paketbaum inkl. `@openai/codex` nach sich —
+  unnötige Supply-Chain-Angriffsfläche und ein Node-≥22-Requirement im Konflikt
+  mit `engines.node >=20`).
+- `npm audit fix`: bekannte Schwachstellen in transitiven Abhängigkeiten behoben
+  (`brace-expansion` DoS, Path Traversal in `@hono/node-server` via
+  `@modelcontextprotocol/sdk`). `npm audit` meldet 0 Schwachstellen.
+
 ## [1.4.0] – 2026-07-31
 
 ### Geändert
