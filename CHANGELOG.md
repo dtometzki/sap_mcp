@@ -7,6 +7,33 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.4.0] – 2026-07-31
+
+### Geändert
+
+- Direkte API-Aufrufe (Coveo-Token, Coveo-Suche, Note-Detail-API, Anhang-Download)
+  haben jetzt ein explizites Timeout (`SAP_API_TIMEOUT_MS`, Default 60 s). Diese Calls
+  laufen serialisiert in der Tool-Queue — ein hängender Request blockierte bisher
+  jeden anderen MCP-Client.
+- Die Queue-/Recovery-/Persistenz-/Idle-Logik des Servers ist aus `server.ts` in
+  `toolRunner.ts` extrahiert und dadurch offline unit-testbar (Serialisierung,
+  State-Throttling, Idle-Shutdown, Session-Recovery).
+
+### Behoben
+
+- `intFromEnv` akzeptierte stillschweigend Müll wie `SAP_NAV_TIMEOUT_MS=60000ms`
+  (parseInt truncat das zu 60). Ungültige ENV-Werte führen jetzt zu einem klaren
+  Fehler beim Start.
+- Note-Nummern-Schema wird in `sap_note_get` wiederverwendet statt doppelt definiert;
+  Seitenzugriffe laufen über den neuen `withOpenPage`-Helper, sodass ein Fehler im
+  Tool-Callback keine offene Seite (und deren Browser-Ressourcen) hinterlassen kann.
+
+### Hinzugefügt
+
+- Unit-Tests für `intFromEnv` und den `ToolRunner` (Reihenfolge, Fehler-Isolation,
+  Persist-Throttling, Idle-Shutdown, Recovery bei Session-Ablauf vs. fehlender
+  Berechtigung).
+
 ## [1.3.1] – 2026-07-25
 
 ### Behoben

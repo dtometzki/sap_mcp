@@ -150,7 +150,7 @@ async function fetchAttachmentsViaApi(
   return withRetry(async () => {
     const response = await session
       .request()
-      .get(url, { headers: { accept: "application/json" } });
+      .get(url, { headers: { accept: "application/json" }, timeout: config.apiTimeoutMs });
     try {
       assertNotLoggedOut(response.status(), response.url(), `Note ${id}`, response.ok());
       if (!response.ok()) {
@@ -207,8 +207,7 @@ async function fetchAttachmentsViaDom(
   config: Config,
   id: string,
 ): Promise<NoteAttachment[]> {
-  const page = await session.open(buildUrl(config.noteUrlTemplate, { id }));
-  try {
+  return session.withOpenPage(buildUrl(config.noteUrlTemplate, { id }), async (page) => {
     const anchors = await page.$$eval("a[href]", (elements) =>
       elements.map((element) => ({
         href: (element as HTMLAnchorElement).href,
@@ -225,9 +224,7 @@ async function fetchAttachmentsViaDom(
       found.set(anchor.href, { fileName, url: anchor.href });
     }
     return [...found.values()];
-  } finally {
-    await page.close();
-  }
+  });
 }
 
 /**
@@ -307,7 +304,9 @@ export async function downloadAttachment(
   }
 
   return withRetry(async () => {
-    const response = await session.request().get(attachment.url);
+    const response = await session
+      .request()
+      .get(attachment.url, { timeout: config.apiTimeoutMs });
     try {
       assertNotLoggedOut(
         response.status(),

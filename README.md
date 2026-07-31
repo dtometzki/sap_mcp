@@ -96,6 +96,7 @@ einen Anhang hat; sonst genügt ein eindeutiger Teilstring (case-insensitive).
 | `SAP_ATTACHMENT_DIR` | `~/Downloads/sap-notes` | Zielordner für Anhänge (ein Unterordner je Note-Nummer, `~` wird expandiert) |
 | `SAP_PROBE_URL` | `https://me.sap.com/notes/2170696` | Seite zur Session-Prüfung |
 | `SAP_NAV_TIMEOUT_MS` | `60000` | Navigations-Timeout |
+| `SAP_API_TIMEOUT_MS` | `60000` | Timeout für direkte HTTP-API-Aufrufe (Coveo-Token/-Suche, Note-Detail-API, Anhang-Download) |
 | `SAP_NETWORK_IDLE_TIMEOUT_MS` | `4000` | Kurze Wartezeit auf Netzwerk-Ruhe |
 | `SAP_RENDER_SETTLE_MS` | `2500` | Wartezeit für spätes SPA-Rendering |
 | `SAP_IDLE_TIMEOUT_MS` | `600000` | Browser nach Inaktivität schließen (0 = deaktiviert) |

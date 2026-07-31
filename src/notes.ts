@@ -197,7 +197,10 @@ async function fetchCoveoToken(session: SapSession, config: Config): Promise<str
 
   const response = await session
     .request()
-    .get(config.coveoTokenUrl, { headers: { accept: "application/json" } });
+    .get(config.coveoTokenUrl, {
+      headers: { accept: "application/json" },
+      timeout: config.apiTimeoutMs,
+    });
 
   try {
     if (!response.ok()) {
@@ -244,6 +247,7 @@ async function searchNotesViaCoveo(
     const body = await withRetry(async () => {
       const response = await session.request().post(config.coveoSearchUrl, {
         headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        timeout: config.apiTimeoutMs,
         data: {
           locale: "en-US",
           q: query,
@@ -305,12 +309,7 @@ export async function searchNotesViaDom(
   limit: number,
 ): Promise<NoteHit[]> {
   const url = buildUrl(config.searchUrlTemplate, { query });
-  const page = await session.open(url);
-  try {
-    return await collectHits(page, limit);
-  } finally {
-    await page.close();
-  }
+  return session.withOpenPage(url, (page) => collectHits(page, limit));
 }
 
 /** Picks the densest plausible content container, falling back to the whole body. */
@@ -338,9 +337,8 @@ export async function fetchNote(
   id: string,
 ): Promise<NoteDetail> {
   const url = buildUrl(config.noteUrlTemplate, { id });
-  return withRetry(async () => {
-    const page = await session.open(url);
-    try {
+  return withRetry(async () =>
+    session.withOpenPage(url, async (page) => {
       const html = await extractMainHtml(page);
       const markdown = turndown.turndown(html).replace(/\n{3,}/g, "\n\n").trim();
 
@@ -355,8 +353,6 @@ export async function fetchNote(
       const title = rawTitle.replace(/\s*[-|]\s*SAP.*$/i, "").trim() || `SAP Note ${id}`;
 
       return { id, title, url, markdown };
-    } finally {
-      await page.close();
-    }
-  });
+    }),
+  );
 }

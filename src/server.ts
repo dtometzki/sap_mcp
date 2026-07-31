@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { loadConfig } from "./config.js";
-import { AccessDeniedError, SapSession, SessionExpiredError } from "./session.js";
+import { SapSession } from "./session.js";
 import { fetchNote, resetTokenCache, searchNotes } from "./notes.js";
 import {
   downloadAttachment,
@@ -11,14 +11,12 @@ import {
   type AttachmentDownload,
   type NoteAttachment,
 } from "./attachments.js";
+import { ToolRunner } from "./toolRunner.js";
 
 const require = createRequire(import.meta.url);
 const { version: pkgVersion } = require("../package.json") as { version: string };
 
 const MAX_RESULTS = 25;
-
-/** Persist refreshed cookies at most this often; see persistSessionState(). */
-const STATE_SAVE_INTERVAL_MS = 5 * 60_000;
 
 const config = loadConfig();
 const session = new SapSession(config, true);
@@ -31,116 +29,18 @@ function ensureSession(): Promise<void> {
   return session.start();
 }
 
-/**
- * SAP calls share one authenticated browser context and are deliberately serialized.
- * This keeps concurrent MCP clients from creating request bursts against the portal.
- */
-let requestQueue: Promise<void> = Promise.resolve();
+/** Persist refreshed cookies at most this often; see ToolRunner.persistSessionState(). */
+const STATE_SAVE_INTERVAL_MS = 5 * 60_000;
 
-function runSerialized<T>(operation: () => Promise<T>): Promise<T> {
-  const result = requestQueue.then(operation);
-  requestQueue = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  return result;
-}
-
-let lastStateSaveMs = 0;
-
-/**
- * The portal rotates/extends cookies while the session is used, but the browser
- * context is volatile — without writing the state back, the stored session dies at
- * the ORIGINAL cookie expiry. Throttled and best-effort: a failed save must never
- * fail the tool call that triggered it. Called from inside the serialized queue.
- */
-async function persistSessionState(): Promise<void> {
-  const now = Date.now();
-  if (now - lastStateSaveMs < STATE_SAVE_INTERVAL_MS) return;
-  lastStateSaveMs = now;
-  await session.saveState().catch(() => undefined);
-}
-
-/**
- * An idle headless Chromium holds roughly 200 MB of RAM. Close the session after a
- * period of inactivity; start() is lazy and idempotent, so the next tool call simply
- * relaunches the browser and re-reads the stored session state.
- */
-let idleTimer: NodeJS.Timeout | undefined;
-
-function scheduleIdleClose(): void {
-  if (idleTimer) clearTimeout(idleTimer);
-  if (config.idleTimeoutMs <= 0) return; // 0 disables the idle shutdown
-  idleTimer = setTimeout(() => {
-    // Enqueue via the request queue so we never close mid-operation.
-    runSerialized(() => session.close()).catch(() => undefined);
-  }, config.idleTimeoutMs);
-  idleTimer.unref(); // the timer alone must not keep the process alive
-}
-
-/**
- * On session expiry, drop the stale browser context: the next call then re-reads
- * session.json from disk, so a fresh `npm run login` is picked up WITHOUT
- * restarting the MCP server. Serialized to avoid racing queued operations.
- */
-async function recoverFromError(error: unknown): Promise<void> {
-  if (error instanceof SessionExpiredError) {
-    resetTokenCache();
-    await runSerialized(() => session.close()).catch(() => undefined);
-  }
-}
-
-function toErrorText(error: unknown): string {
-  // Both already carry a complete, actionable message; do not bury it behind a prefix.
-  if (error instanceof SessionExpiredError || error instanceof AccessDeniedError) {
-    return error.message;
-  }
-  if (error instanceof Error) return `SAP portal request failed: ${error.message}`;
-  return "SAP portal request failed with an unknown error.";
-}
-
-interface ToolResponse {
-  [key: string]: unknown;
-  content: { type: "text"; text: string }[];
-  isError?: boolean;
-}
-
-interface ExecuteOptions {
-  /**
-   * Whether a successful call may write the browser's cookies back to session.json.
-   *
-   * Off for the status check: it reports an expired session by RETURNING false rather
-   * than throwing, so the call counts as successful and would persist the dead cookie
-   * jar — overwriting a session.json that `npm run login` had just refreshed in another
-   * terminal, i.e. destroying the very session the user ran the check to verify.
-   */
-  persistState?: boolean;
-}
-
-/**
- * Shared wrapper for every tool call: serializes access, ensures the session,
- * persists refreshed cookies, handles errors, and reschedules the idle timer.
- */
-async function executeTool<T>(
-  operation: () => Promise<T>,
-  format: (result: T) => string,
-  { persistState = true }: ExecuteOptions = {},
-): Promise<ToolResponse> {
-  try {
-    const result = await runSerialized(async () => {
-      await ensureSession();
-      const value = await operation();
-      if (persistState) await persistSessionState();
-      return value;
-    });
-    return { content: [{ type: "text", text: format(result) }] };
-  } catch (error) {
-    await recoverFromError(error);
-    return { isError: true, content: [{ type: "text", text: toErrorText(error) }] };
-  } finally {
-    scheduleIdleClose();
-  }
-}
+const runner = new ToolRunner(
+  {
+    ensureSession,
+    saveState: () => session.saveState(),
+    close: () => session.close(),
+    resetTokenCache,
+  },
+  { idleTimeoutMs: config.idleTimeoutMs, stateSaveIntervalMs: STATE_SAVE_INTERVAL_MS },
+);
 
 const server = new McpServer({ name: "sap-notes", version: pkgVersion });
 
@@ -157,7 +57,7 @@ server.registerTool(
     },
   },
   async ({ query, limit }) =>
-    executeTool(
+    runner.execute(
       () => searchNotes(session, config, query, limit),
       (hits) =>
         hits.length === 0
@@ -165,6 +65,8 @@ server.registerTool(
           : hits.map((hit) => `${hit.id} — ${hit.title}\n${hit.url}`).join("\n\n"),
     ),
 );
+
+const NOTE_NUMBER_SCHEMA = z.string().regex(/^\d{4,10}$/, "Note number must be 4-10 digits");
 
 server.registerTool(
   "sap_note_get",
@@ -174,17 +76,15 @@ server.registerTool(
       "Fetch the full content of a single SAP Note or KBA by its number, as Markdown " +
       "(symptom, reason, solution, validity, references).",
     inputSchema: {
-      number: z.string().regex(/^\d{4,10}$/, "Note number must be 4-10 digits"),
+      number: NOTE_NUMBER_SCHEMA,
     },
   },
   async ({ number }) =>
-    executeTool(
+    runner.execute(
       () => fetchNote(session, config, number),
       (note) => `# ${note.id} — ${note.title}\n\nSource: ${note.url}\n\n${note.markdown}`,
     ),
 );
-
-const NOTE_NUMBER_SCHEMA = z.string().regex(/^\d{4,10}$/, "Note number must be 4-10 digits");
 
 function formatAttachmentList(number: string, attachments: NoteAttachment[]): string {
   if (attachments.length === 0) {
@@ -224,7 +124,7 @@ server.registerTool(
     },
   },
   async ({ number }) =>
-    executeTool(
+    runner.execute(
       () => fetchAttachmentList(session, config, number),
       (attachments) => formatAttachmentList(number, attachments),
     ),
@@ -252,7 +152,7 @@ server.registerTool(
     },
   },
   async ({ number, fileName }) =>
-    executeTool(
+    runner.execute(
       () => downloadAttachment(session, config, number, fileName),
       formatAttachmentDownload,
     ),
@@ -268,13 +168,13 @@ server.registerTool(
     inputSchema: {},
   },
   async () =>
-    executeTool(
+    runner.execute(
       async () => {
         const authenticated = await session.isAuthenticated();
         if (!authenticated) {
           // Drop the dead context here, because returning false is not an error and so
-          // never reaches recoverFromError. Without this the server would keep using the
-          // expired cookie jar instead of re-reading session.json on the next call.
+          // never reaches the runner's recovery path. Without this the server would keep
+          // using the expired cookie jar instead of re-reading session.json on the next call.
           resetTokenCache();
           // Already inside the serialized queue — close directly, do not re-enqueue.
           await session.close().catch(() => undefined);
@@ -295,15 +195,10 @@ let isShuttingDown = false;
 async function shutdown(): Promise<void> {
   if (isShuttingDown) return;
   isShuttingDown = true;
-  if (idleTimer) clearTimeout(idleTimer);
-  resetTokenCache();
   // Close the MCP transport first so no new requests arrive.
   await server.close().catch(() => undefined);
-  // Do not let a hanging browser close keep the process alive forever.
-  await Promise.race([
-    requestQueue.then(() => session.close()).catch(() => undefined),
-    new Promise((resolve) => setTimeout(resolve, SHUTDOWN_TIMEOUT_MS)),
-  ]);
+  // Waits for queued work, then closes the browser (bounded by its own timeout).
+  await runner.shutdown(SHUTDOWN_TIMEOUT_MS);
 }
 
 process.on("SIGINT", () => void shutdown());

@@ -28,6 +28,12 @@ export interface Config {
   /** Milliseconds to wait for portal pages (SPA, slow backend). */
   navigationTimeoutMs: number;
   /**
+   * Milliseconds to wait for direct HTTP API calls (Coveo token/search, the
+   * note-detail API, attachment downloads). These run inside the serialized
+   * tool queue, so a hung request would otherwise block every other client.
+   */
+  apiTimeoutMs: number;
+  /**
    * Milliseconds to wait for "networkidle". The portal keeps polling connections
    * open, so this almost always times out; keep it short so we do not block on it.
    */
@@ -51,11 +57,16 @@ export function expandHomePath(path: string): string {
   return path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : path;
 }
 
-function intFromEnv(name: string, fallback: number, minimum = 1): number {
+/**
+ * Strictly parses an integer ENV variable. Number() (not parseInt) so trailing
+ * junk like "60000ms" is rejected instead of silently becoming "60".
+ */
+export function intFromEnv(name: string, fallback: number, minimum = 1): number {
   const raw = process.env[name];
   if (raw === undefined) return fallback;
-  const parsed = Number.parseInt(raw, 10);
-  if (Number.isNaN(parsed) || parsed < minimum) {
+  const trimmed = raw.trim();
+  const parsed = Number(trimmed);
+  if (trimmed === "" || !Number.isInteger(parsed) || parsed < minimum) {
     throw new Error(`${name} must be an integer >= ${minimum}, got: ${raw}`);
   }
   return parsed;
@@ -80,6 +91,7 @@ export function loadConfig(): Config {
     attachmentDirPath: expandHomePath(process.env.SAP_ATTACHMENT_DIR ?? DEFAULT_ATTACHMENT_DIR),
     sessionProbeUrl: process.env.SAP_PROBE_URL ?? "https://me.sap.com/notes/2170696",
     navigationTimeoutMs: intFromEnv("SAP_NAV_TIMEOUT_MS", 60_000),
+    apiTimeoutMs: intFromEnv("SAP_API_TIMEOUT_MS", 60_000),
     networkIdleTimeoutMs: intFromEnv("SAP_NETWORK_IDLE_TIMEOUT_MS", 4_000),
     renderSettleMs: intFromEnv("SAP_RENDER_SETTLE_MS", 2_500),
     idleTimeoutMs: intFromEnv("SAP_IDLE_TIMEOUT_MS", 10 * 60_000, 0),

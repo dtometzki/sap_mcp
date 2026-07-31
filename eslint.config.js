@@ -17,8 +17,12 @@ export default tseslint.config(
     },
   },
   {
-    // node:test's test() returns a promise the runner itself awaits.
+    // node:test's test() returns a promise the runner itself awaits; test stubs
+    // are often async without awaiting (fakes, thrown errors).
     files: ["src/**/*.test.ts"],
-    rules: { "@typescript-eslint/no-floating-promises": "off" },
+    rules: {
+      "@typescript-eslint/no-floating-promises": "off",
+      "@typescript-eslint/require-await": "off",
+    },
   },
 );

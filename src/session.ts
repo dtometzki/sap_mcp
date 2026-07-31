@@ -248,6 +248,20 @@ export class SapSession {
     }
   }
 
+  /**
+   * Opens a page, runs the callback, and always closes the page again.
+   * Every tool call that renders a portal page must go through here so a
+   * callback error can never leak an open page (and its browser resources).
+   */
+  async withOpenPage<T>(url: string, fn: (page: Page) => Promise<T>): Promise<T> {
+    const page = await this.open(url);
+    try {
+      return await fn(page);
+    } finally {
+      await page.close();
+    }
+  }
+
   /** Exposes a raw page for the interactive login flow. */
   async newPage(): Promise<Page> {
     if (!this.context) throw new Error("Session not started");
