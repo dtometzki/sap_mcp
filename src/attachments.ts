@@ -1,4 +1,5 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, open, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { buildUrl, type Config } from "./config.js";
 import {
@@ -30,11 +31,11 @@ export interface AttachmentDownload {
 export const INLINE_TEXT_LIMIT = 200_000;
 
 /**
- * Reject downloads whose Content-Length exceeds this, so a multi-hundred-MB trace
- * file cannot exhaust the process's RAM (response.body() buffers everything).
- * The check is best-effort: servers may omit Content-Length (chunked encoding).
+ * Hard limit for downloaded bytes. Content-Length is checked before reading, and the
+ * streaming loop enforces the same limit for chunked or incorrectly declared responses.
  */
 export const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
+const MAX_ATTACHMENT_REDIRECTS = 5;
 
 /**
  * Attachments may only be fetched from SAP-owned hosts. The download URL comes from
@@ -49,6 +50,117 @@ export function isAllowedAttachmentHost(url: string): boolean {
     return host === "sap.com" || host.endsWith(".sap.com");
   } catch {
     return false;
+  }
+}
+
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
+
+/**
+ * Fetches an attachment without automatic redirects.
+ *
+ * Every hop is validated before the request is sent. Cookies are selected separately
+ * for each URL using the browser context's normal scope rules.
+ */
+export async function fetchAllowedAttachment(
+  initialUrl: string,
+  cookieHeader: (url: string) => Promise<string>,
+  signal: AbortSignal,
+  fetchImpl: FetchLike = fetch,
+): Promise<Response> {
+  let currentUrl = initialUrl;
+
+  for (let redirectCount = 0; ; redirectCount += 1) {
+    if (!isAllowedAttachmentHost(currentUrl)) {
+      throw new Error(`Refusing to download from non-SAP host: ${currentUrl}`);
+    }
+
+    const cookie = await cookieHeader(currentUrl);
+    const headers: Record<string, string> = { accept: "*/*" };
+    if (cookie) headers.cookie = cookie;
+    const response = await fetchImpl(currentUrl, {
+      method: "GET",
+      headers,
+      redirect: "manual",
+      signal,
+    });
+
+    if (!REDIRECT_STATUSES.has(response.status)) {
+      if (!isAllowedAttachmentHost(response.url || currentUrl)) {
+        await response.body?.cancel().catch(() => undefined);
+        throw new Error(`Refusing response from non-SAP host: ${response.url}`);
+      }
+      return response;
+    }
+
+    await response.body?.cancel().catch(() => undefined);
+    if (redirectCount >= MAX_ATTACHMENT_REDIRECTS) {
+      throw new Error(`Attachment download exceeded ${MAX_ATTACHMENT_REDIRECTS} redirects.`);
+    }
+    const location = response.headers.get("location");
+    if (!location) {
+      throw new Error(`Attachment redirect HTTP ${response.status} has no Location header.`);
+    }
+    currentUrl = new URL(location, currentUrl).toString();
+  }
+}
+
+/** Streams a response to a temporary file and atomically installs it on success. */
+export async function writeResponseWithLimit(
+  response: Response,
+  filePath: string,
+  maxBytes: number,
+): Promise<number> {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(`Attachment is ${declaredLength} bytes — exceeds the ${maxBytes}-byte limit.`);
+  }
+  if (!response.body) throw new Error("Attachment response has no body.");
+
+  const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  const handle = await open(temporary, "wx", 0o600);
+  const reader = response.body.getReader();
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error(`Attachment exceeds the ${maxBytes}-byte limit.`);
+      }
+      await handle.write(value);
+    }
+    await handle.close();
+    await rename(temporary, filePath);
+    return bytes;
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    await handle.close().catch(() => undefined);
+    await rm(temporary, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function readInlineText(filePath: string, totalBytes: number): Promise<{
+  text: string;
+  truncated: boolean;
+}> {
+  // Four bytes per Unicode code point is enough to preserve INLINE_TEXT_LIMIT UTF-8 chars.
+  const buffer = Buffer.alloc(INLINE_TEXT_LIMIT * 4 + 4);
+  const handle = await open(filePath, "r");
+  try {
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const decoded = buffer.subarray(0, bytesRead).toString("utf8");
+    return {
+      text: decoded.slice(0, INLINE_TEXT_LIMIT),
+      truncated: totalBytes > bytesRead || decoded.length > INLINE_TEXT_LIMIT,
+    };
+  } finally {
+    await handle.close();
   }
 }
 
@@ -304,28 +416,34 @@ export async function downloadAttachment(
   }
 
   return withRetry(async () => {
-    const response = await session
-      .request()
-      .get(attachment.url, { timeout: config.apiTimeoutMs });
+    const signal = AbortSignal.timeout(config.apiTimeoutMs);
+    let response: Response;
+    try {
+      response = await fetchAllowedAttachment(
+        attachment.url,
+        (url) => session.cookieHeader(url),
+        signal,
+      );
+    } catch (error) {
+      if (signal.aborted) {
+        throw new Error(`Attachment download ETIMEDOUT after ${config.apiTimeoutMs} ms.`, {
+          cause: error,
+        });
+      }
+      throw error;
+    }
+
     try {
       assertNotLoggedOut(
-        response.status(),
-        response.url(),
+        response.status,
+        response.url,
         `"${attachment.fileName}"`,
-        response.ok(),
+        response.ok,
       );
-      if (!response.ok()) {
-        throw new Error(`Attachment download failed: HTTP ${response.status()}`);
+      if (!response.ok) {
+        throw new Error(`Attachment download failed: HTTP ${response.status}`);
       }
-      const contentLength = Number(response.headers()["content-length"]);
-      if (Number.isFinite(contentLength) && contentLength > MAX_DOWNLOAD_BYTES) {
-        throw new Error(
-          `"${attachment.fileName}" is ${contentLength} bytes — exceeds the ${MAX_DOWNLOAD_BYTES}-byte ` +
-            "inline limit. Download it directly from the URL listed by sap_note_attachments.",
-        );
-      }
-      const body = await response.body();
-      const contentType = response.headers()["content-type"] ?? "";
+      const contentType = response.headers.get("content-type") ?? "";
 
       // A login or error page served instead of the file must not end up on disk.
       if (/text\/html/i.test(contentType) && !/\.html?$/i.test(attachment.fileName)) {
@@ -338,22 +456,22 @@ export async function downloadAttachment(
       const directory = join(config.attachmentDirPath, id);
       await mkdir(directory, { recursive: true });
       const filePath = join(directory, sanitizeFileName(attachment.fileName));
-      await writeFile(filePath, body);
+      const bytes = await writeResponseWithLimit(response, filePath, MAX_DOWNLOAD_BYTES);
 
       const result: AttachmentDownload = {
         attachment,
         filePath,
-        bytes: body.length,
+        bytes,
         contentType,
       };
       if (isTextAttachment(attachment.fileName, contentType)) {
-        const text = body.toString("utf8");
-        result.text = text.slice(0, INLINE_TEXT_LIMIT);
-        result.textTruncated = text.length > INLINE_TEXT_LIMIT;
+        const inline = await readInlineText(filePath, bytes);
+        result.text = inline.text;
+        result.textTruncated = inline.truncated;
       }
       return result;
     } finally {
-      await response.dispose().catch(() => undefined);
+      await response.body?.cancel().catch(() => undefined);
     }
   });
 }

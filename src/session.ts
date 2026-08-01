@@ -278,6 +278,19 @@ export class SapSession {
     return this.context.request;
   }
 
+  /**
+   * Cookie header for a direct Node-side request to the given URL.
+   *
+   * BrowserContext.cookies(url) applies the browser's domain/path/secure rules before
+   * returning cookies, so callers never forward the complete SAP cookie jar to a host
+   * merely because it appeared in a redirect.
+   */
+  async cookieHeader(url: string): Promise<string> {
+    if (!this.context) throw new Error("Session not started");
+    const cookies = await this.context.cookies(url);
+    return cookies.map(({ name, value }) => `${name}=${value}`).join("; ");
+  }
+
   async close(): Promise<void> {
     const context = this.context;
     const browser = this.browser;

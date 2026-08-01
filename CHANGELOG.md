@@ -7,6 +7,25 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.4.2] – 2026-08-01
+
+### Behoben
+
+- Das 100-MB-Limit für Anhänge wird jetzt beim Streamen anhand der tatsächlich
+  empfangenen Bytes durchgesetzt. Chunked Responses, fehlende oder falsche
+  `Content-Length`-Header können den Prozess nicht mehr durch einen vollständig
+  gepufferten, unbegrenzten Response-Body in einen Speicher-DoS zwingen.
+- Redirects beim Anhang-Download werden manuell verfolgt und jeder Zielhost wird
+  vor dem nächsten Request gegen die HTTPS-`*.sap.com`-Allowlist geprüft. Cookies
+  werden für jeden Hop nach den Domain-/Path-Regeln des Browserkontexts neu
+  ausgewählt; Redirects auf fremde Hosts werden vor dem Request abgelehnt.
+
+### Geändert
+
+- Anhänge werden zuerst mit Modus `0600` in eine eindeutige temporäre Datei
+  gestreamt und erst nach erfolgreichem Abschluss atomar an den Zielpfad verschoben.
+  Fehlgeschlagene oder zu große Downloads hinterlassen keine Teildatei.
+
 ## [1.4.1] – 2026-07-31
 
 ### Geändert

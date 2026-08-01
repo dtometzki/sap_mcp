@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { buildUrl } from "./config.js";
 import {
@@ -16,11 +19,13 @@ import {
 } from "./session.js";
 import {
   extractAttachments,
+  fetchAllowedAttachment,
   fileNameFromHref,
   isAllowedAttachmentHost,
   isTextAttachment,
   sanitizeFileName,
   selectAttachment,
+  writeResponseWithLimit,
 } from "./attachments.js";
 
 test("buildUrl encodes values and replaces repeated placeholders", () => {
@@ -304,6 +309,84 @@ test("isAllowedAttachmentHost only allows https on sap.com hosts", () => {
   assert.equal(isAllowedAttachmentHost("https://notsap.com/x"), false);
   assert.equal(isAllowedAttachmentHost("http://me.sap.com/x"), false);
   assert.equal(isAllowedAttachmentHost("not a url"), false);
+});
+
+test("fetchAllowedAttachment rejects a foreign redirect before requesting it", async () => {
+  const requested: string[] = [];
+  await assert.rejects(
+    fetchAllowedAttachment(
+      "https://me.sap.com/download/1",
+      async (url) => `cookie-for=${new URL(url).hostname}`,
+      new AbortController().signal,
+      async (url, options) => {
+        requested.push(url);
+        assert.equal(options.redirect, "manual");
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://evil.example/download/1" },
+        });
+      },
+    ),
+    /Refusing to download from non-SAP host/,
+  );
+  assert.deepEqual(requested, ["https://me.sap.com/download/1"]);
+});
+
+test("fetchAllowedAttachment validates every SAP redirect and scopes cookies per hop", async () => {
+  const requested: { url: string; cookie: string | null }[] = [];
+  const response = await fetchAllowedAttachment(
+    "https://me.sap.com/download/1",
+    async (url) => `cookie-for=${new URL(url).hostname}`,
+    new AbortController().signal,
+    async (url, options) => {
+      const headers = new Headers(options.headers);
+      requested.push({ url, cookie: headers.get("cookie") });
+      if (requested.length === 1) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://support.sap.com/files/1" },
+        });
+      }
+      return new Response("attachment", { status: 200 });
+    },
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(requested, [
+    { url: "https://me.sap.com/download/1", cookie: "cookie-for=me.sap.com" },
+    { url: "https://support.sap.com/files/1", cookie: "cookie-for=support.sap.com" },
+  ]);
+});
+
+test("writeResponseWithLimit enforces the actual streamed byte count without Content-Length", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sap-notes-limit-"));
+  const target = join(directory, "attachment.bin");
+  try {
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+          controller.enqueue(new Uint8Array([4, 5, 6]));
+          controller.close();
+        },
+      }),
+    );
+    await assert.rejects(writeResponseWithLimit(response, target, 5), /exceeds the 5-byte limit/);
+    await assert.rejects(access(target));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("writeResponseWithLimit atomically saves a response within the limit", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sap-notes-write-"));
+  const target = join(directory, "attachment.txt");
+  try {
+    const response = new Response("safe content");
+    assert.equal(await writeResponseWithLimit(response, target, 100), 12);
+    assert.equal(await readFile(target, "utf8"), "safe content");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("sanitizeFileName prevents traversal and keeps names readable", () => {

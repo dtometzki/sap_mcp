@@ -80,6 +80,9 @@ Hinweis zu Anhängen: Solange eine Note den Banner „A new version is in prepar
 zeigt, blendet das Portal Anhänge portalweit aus (KBA 3453681) — die Liste ist dann
 leer, bis SAP die neue Version freigibt. `fileName` darf entfallen, wenn die Note genau
 einen Anhang hat; sonst genügt ein eindeutiger Teilstring (case-insensitive).
+Downloads sind auf 100 MB begrenzt; das Limit wird auch bei chunked Responses anhand
+der tatsächlich empfangenen Bytes durchgesetzt. Redirects werden nur zu HTTPS-Hosts
+unter `sap.com` verfolgt.
 
 ## Konfiguration (ENV, alles optional)
 
