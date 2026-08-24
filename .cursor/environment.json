@@ -1,3 +1,4 @@
 {
-  "install": "npm ci && npx playwright install --with-deps chromium"
+  "name": "sap-notes-mcp",
+  "install": "npm ci && npx playwright install --with-deps chromium && npm run build"
 }

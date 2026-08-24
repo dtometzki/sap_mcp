@@ -26,6 +26,17 @@ npm run login          # sichtbarer Browser: S-User + MFA, dann Enter im Termina
 npm start              # optionaler Smoke-Test (stdio, wartet auf MCP-Client)
 ```
 
+### Cursor Cloud Agents
+
+Die Cloud-Umgebung liegt in [`.cursor/environment.json`](.cursor/environment.json)
+und gilt für das ganze Repo (nicht nur eine persönliche Dashboard-Umgebung).
+Nach dem Checkout laufen `npm ci`, Playwright Chromium und `npm run build`.
+
+`npm start` gehört nicht ins Start-Skript: der MCP-Server wartet auf stdio.
+`npm run login` bleibt interaktiv (sichtbarer Browser + MFA) und kann in der
+Cloud-VM nicht automatisch laufen. Ohne `~/.sap-notes-mcp/session.json`
+funktionieren die Note-Tools dort nicht.
+
 ### ENV-Variablen laden (optional)
 
 Ab Node 20.6 können ENV-Variablen aus einer `.env`-Datei geladen werden (ohne
