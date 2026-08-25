@@ -7,6 +7,36 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.5.0] – 2026-08-25
+
+### Hinzugefügt
+
+- **Automatischer Login über `.env`**: `SAPUSER` und `SAPPASSWORD` füllen das
+  SAP-Logon-Formular selbständig aus. Der MCP-Server meldet sich damit bei
+  abgelaufener Session headless neu an und wiederholt den fehlgeschlagenen
+  Tool-Aufruf einmal, ohne dass ein Mensch `npm run login` ausführen muss.
+- Eigener `.env`-Loader (`src/env.ts`, ohne neue Dependency): Server und Login-CLI
+  lesen `$SAP_ENV_FILE` → `<Repo-Root>/.env` → `$PWD/.env` ein. Echte
+  Umgebungsvariablen haben Vorrang; zu offene Dateirechte werden auf stderr gewarnt.
+- `npm run login` füllt Benutzer und Passwort automatisch aus und fragt nur noch
+  dann nach, wenn ein Mensch nötig ist (MFA, Passwortwechsel, Fehlermeldung).
+- Neue Konfiguration: `SAP_AUTO_LOGIN`, `SAP_AUTO_LOGIN_COOLDOWN_MS`,
+  `SAP_LOGIN_STEP_TIMEOUT_MS`, `SAP_ENV_FILE` sowie konfigurierbare Selektoren
+  (`SAP_LOGIN_USER_SELECTOR`, `SAP_LOGIN_PASSWORD_SELECTOR`,
+  `SAP_LOGIN_SUBMIT_SELECTOR`, `SAP_LOGIN_MFA_SELECTOR`).
+
+### Sicherheit
+
+- MFA wird erkannt und beendet den Auto-Login sofort mit einem klaren Hinweis,
+  statt blind weiterzuklicken.
+- Nach einem fehlgeschlagenen Auto-Login gilt eine Sperrzeit (Default 5 min); bei
+  MFA oder abgelehnten Credentials wird für die restliche Prozesslaufzeit kein
+  weiterer Versuch unternommen — ein Retry-Loop kann den S-User nicht sperren.
+- Der Login läuft serialisiert in der bestehenden Tool-Queue: parallele
+  MCP-Clients lösen nie mehrere gleichzeitige Anmeldungen aus.
+- Das Passwort wird ausschließlich aus der `.env` bzw. der Prozessumgebung
+  gelesen, nie geloggt; Diagnoseausgaben gehen auf stderr, nicht auf stdout.
+
 ## [1.4.2] – 2026-08-01
 
 ### Behoben

@@ -45,9 +45,47 @@ export interface Config {
    * (frees ~200 MB RAM); the next call relaunches it lazily. 0 disables.
    */
   idleTimeoutMs: number;
-  /** Only used by the interactive login CLI to prefill the username field, never by the server. */
+  /** S-user for the login form (SAPUSER, legacy: SAP_USERNAME). */
   username: string | undefined;
+  /** Password for the login form (SAPPASSWORD, legacy: SAP_PASSWORD). Only ever read from .env. */
+  password: string | undefined;
+  /**
+   * Whether the server may log in by itself when the stored session has expired.
+   * Requires username + password; SAP_AUTO_LOGIN=0 disables it even then.
+   */
+  autoLoginEnabled: boolean;
+  /** After a failed automatic login, do not try again for this long (throttles login storms). */
+  autoLoginCooldownMs: number;
+  /** Milliseconds to wait for a single login step (field appears, page reacts). */
+  loginStepTimeoutMs: number;
+  /** Selector of the user/e-mail field on the SAP identity provider. */
+  loginUserSelector: string;
+  /** Selector of the password field. */
+  loginPasswordSelector: string;
+  /** Selector of the submit button; Enter is pressed when it is not present. */
+  loginSubmitSelector: string;
+  /** Selector that identifies an MFA/one-time-code prompt (never automatable). */
+  loginMfaSelector: string;
 }
+
+/**
+ * Default selectors for the SAP identity provider. Configurable for the same reason the
+ * URLs are: SAP reworks the logon frontend without notice, and a renamed field id must be
+ * fixable in .env instead of in a release.
+ */
+const DEFAULT_LOGIN_USER_SELECTOR =
+  "input#j_username, input[name='j_username'], input[name='mail'], input[type='email']";
+const DEFAULT_LOGIN_PASSWORD_SELECTOR =
+  "input#j_password, input[name='j_password'], input[type='password']";
+const DEFAULT_LOGIN_SUBMIT_SELECTOR =
+  "#logOnFormSubmit, button[type='submit'], input[type='submit']";
+const DEFAULT_LOGIN_MFA_SELECTOR = [
+  "input[autocomplete='one-time-code']",
+  "input[name*='otp' i]",
+  "input[id*='otp' i]",
+  "input[name*='passcode' i]",
+  "input[id*='passcode' i]",
+].join(", ");
 
 const DEFAULT_STATE_PATH = join(homedir(), ".sap-notes-mcp", "session.json");
 const DEFAULT_ATTACHMENT_DIR = join(homedir(), "Downloads", "sap-notes");
@@ -72,8 +110,33 @@ export function intFromEnv(name: string, fallback: number, minimum = 1): number 
   return parsed;
 }
 
+/**
+ * Strictly parses a boolean ENV variable; anything unrecognized is an error rather
+ * than a silent "false", so a typo cannot quietly disable the automatic login.
+ */
+export function boolFromEnv(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const value = raw.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(value)) return true;
+  if (["0", "false", "no", "off"].includes(value)) return false;
+  throw new Error(`${name} must be one of 1/0/true/false/yes/no/on/off, got: ${raw}`);
+}
+
+/** Empty strings count as "not set" — an empty SAPPASSWORD= line must not start a login attempt. */
+function stringFromEnv(...names: string[]): string | undefined {
+  for (const name of names) {
+    const value = process.env[name]?.trim();
+    if (value) return value;
+  }
+  return undefined;
+}
+
 export function loadConfig(): Config {
   const coveoOrg = process.env.SAP_COVEO_ORG ?? "sapamericaproductiontyfzmfz0";
+  // SAPUSER/SAPPASSWORD are the documented names; the older SAP_* spellings stay valid.
+  const username = stringFromEnv("SAPUSER", "SAP_USERNAME");
+  const password = stringFromEnv("SAPPASSWORD", "SAP_PASSWORD");
   return {
     storageStatePath: process.env.SAP_STATE_PATH ?? DEFAULT_STATE_PATH,
     searchUrlTemplate:
@@ -95,7 +158,18 @@ export function loadConfig(): Config {
     networkIdleTimeoutMs: intFromEnv("SAP_NETWORK_IDLE_TIMEOUT_MS", 4_000),
     renderSettleMs: intFromEnv("SAP_RENDER_SETTLE_MS", 2_500),
     idleTimeoutMs: intFromEnv("SAP_IDLE_TIMEOUT_MS", 10 * 60_000, 0),
-    username: process.env.SAP_USERNAME,
+    username,
+    password,
+    // Without both credentials there is nothing to automate, so the flag defaults to
+    // "on" only in that case; SAP_AUTO_LOGIN=0 turns it off explicitly.
+    autoLoginEnabled: boolFromEnv("SAP_AUTO_LOGIN", true) && username !== undefined && password !== undefined,
+    autoLoginCooldownMs: intFromEnv("SAP_AUTO_LOGIN_COOLDOWN_MS", 5 * 60_000, 0),
+    loginStepTimeoutMs: intFromEnv("SAP_LOGIN_STEP_TIMEOUT_MS", 30_000),
+    loginUserSelector: process.env.SAP_LOGIN_USER_SELECTOR ?? DEFAULT_LOGIN_USER_SELECTOR,
+    loginPasswordSelector:
+      process.env.SAP_LOGIN_PASSWORD_SELECTOR ?? DEFAULT_LOGIN_PASSWORD_SELECTOR,
+    loginSubmitSelector: process.env.SAP_LOGIN_SUBMIT_SELECTOR ?? DEFAULT_LOGIN_SUBMIT_SELECTOR,
+    loginMfaSelector: process.env.SAP_LOGIN_MFA_SELECTOR ?? DEFAULT_LOGIN_MFA_SELECTOR,
   };
 }
 

@@ -111,6 +111,22 @@ async function hasUsableState(path: string): Promise<boolean> {
   }
 }
 
+/** Options for SapSession.start(); the defaults are the server's read-only behaviour. */
+export interface StartOptions {
+  /**
+   * Launch even when no usable state file exists. Only the login flows set this: a
+   * headless server without a session must keep failing with SessionExpiredError,
+   * because a browser without cookies cannot answer a single tool call.
+   */
+  allowMissingState?: boolean;
+  /**
+   * Start from an empty cookie jar instead of the stored state. Used by the login
+   * flows so a half-expired session cannot leave the identity provider in a state
+   * where neither the login form nor the portal is shown.
+   */
+  ignoreStoredState?: boolean;
+}
+
 /**
  * Owns the Playwright browser and the authenticated context.
  * One instance per process; the MCP server keeps it alive between tool calls
@@ -131,19 +147,19 @@ export class SapSession {
    * Opens the browser and restores the saved session. Throws if no state file exists.
    * Safe to call concurrently and repeatedly; a failed start can be retried.
    */
-  start(): Promise<void> {
-    this.startPromise ??= this.doStart().catch((error: unknown) => {
+  start(options: StartOptions = {}): Promise<void> {
+    this.startPromise ??= this.doStart(options).catch((error: unknown) => {
       this.startPromise = undefined;
       throw error;
     });
     return this.startPromise;
   }
 
-  private async doStart(): Promise<void> {
+  private async doStart({ allowMissingState, ignoreStoredState }: StartOptions): Promise<void> {
     if (this.context) return;
 
-    const hasState = await hasUsableState(this.config.storageStatePath);
-    if (!hasState && this.headless) {
+    const hasState = !ignoreStoredState && (await hasUsableState(this.config.storageStatePath));
+    if (!hasState && this.headless && !allowMissingState) {
       throw new SessionExpiredError();
     }
 

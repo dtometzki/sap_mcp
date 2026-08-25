@@ -1,37 +1,65 @@
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
+import { loadDotEnv } from "./env.js";
 import { loadConfig } from "./config.js";
 import { SapSession } from "./session.js";
+import {
+  credentialsFromConfig,
+  fillLoginForm,
+  waitForLoginResult,
+  MfaRequiredError,
+} from "./autoLogin.js";
 
 /**
  * Interactive login. Run once per machine (and again whenever the session expires).
- * A visible browser window is opened; sign in there, including MFA, then press Enter.
- * Credentials are optional — typing them into the browser yourself is the safer path,
- * because nothing is then read from the environment.
+ *
+ * With SAPUSER/SAPPASSWORD in .env the form is filled and submitted automatically; the
+ * browser window stays visible so anything that needs a human (MFA above all) can be
+ * completed by hand. Without credentials it behaves exactly as before: type everything
+ * into the browser yourself.
  */
 async function main(): Promise<void> {
+  const envFile = loadDotEnv();
   const config = loadConfig();
+  const credentials = credentialsFromConfig(config);
   const session = new SapSession(config, false);
   const rl = createInterface({ input: stdin, output: stdout });
 
   try {
-    await session.start();
+    await session.start({ allowMissingState: true, ignoreStoredState: true });
     const page = await session.newPage();
     await page.goto(config.sessionProbeUrl, { waitUntil: "domcontentloaded" });
 
-    if (config.username) {
+    let needsManualStep = true;
+    if (credentials) {
+      console.log(
+        `Signing in as ${credentials.username} with the credentials from ${envFile ?? ".env"}...`,
+      );
+      try {
+        await fillLoginForm(page, config, credentials);
+        await waitForLoginResult(page, config);
+        needsManualStep = false;
+        console.log("Automatic login completed.");
+      } catch (error) {
+        console.log(
+          error instanceof MfaRequiredError
+            ? "\nMFA required — please complete it in the browser window."
+            : `\nAutomatic login could not finish: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    } else if (config.username) {
       // Best-effort prefill; the SAP identity provider changes field ids over time,
       // so failure here is not fatal — the user simply types the credentials.
       await page
-        .fill("input[type='email'], input[name='j_username'], #j_username", config.username, {
-          timeout: 10_000,
-        })
+        .fill(config.loginUserSelector, config.username, { timeout: 10_000 })
         .catch(() => undefined);
     }
 
-    console.log("\nA browser window is open.");
-    console.log("Sign in with your S-user (including MFA) until you see the SAP Note.");
-    await rl.question("\nPress Enter here once you are logged in... ");
+    if (needsManualStep) {
+      console.log("\nA browser window is open.");
+      console.log("Sign in with your S-user (including MFA) until you see the SAP Note.");
+      await rl.question("\nPress Enter here once you are logged in... ");
+    }
 
     console.log("\nChecking the session (this can take a few seconds)...");
     if (!(await session.isAuthenticated())) {
@@ -41,6 +69,12 @@ async function main(): Promise<void> {
     await session.saveState();
     console.log(`\nSession saved to ${config.storageStatePath} (mode 0600).`);
     console.log("The MCP server can now run headless.");
+    if (config.autoLoginEnabled) {
+      console.log(
+        "Automatic re-login is enabled: when this session expires, the server signs in " +
+          "again by itself (unless MFA is requested).",
+      );
+    }
   } finally {
     rl.close();
     await session.close();

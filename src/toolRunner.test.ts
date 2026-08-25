@@ -146,3 +146,82 @@ test("shutdown closes once and is idempotent", async () => {
   assert.ok(calls.includes("reset"));
   assert.equal(calls.filter((call) => call === "close").length, 1);
 });
+
+test("execute retries once after an automatic re-login", async () => {
+  let attempts = 0;
+  const { deps, calls } = createDeps({
+    reauthenticate: async () => {
+      calls.push("reauth");
+    },
+  });
+  const runner = new ToolRunner(deps, { idleTimeoutMs: 0, stateSaveIntervalMs: 60_000 });
+  const response = await runner.execute(async () => {
+    attempts += 1;
+    if (attempts === 1) throw new SessionExpiredError();
+    return "recovered";
+  }, String);
+  assert.deepEqual(response, { content: [{ type: "text", text: "recovered" }] });
+  assert.equal(attempts, 2);
+  // The dead context is dropped before the login, and the retry starts a fresh one.
+  // No "save": the login has just written the state file, so the throttle suppresses an
+  // immediate rewrite with the cookies of the context that was only created afterwards.
+  assert.deepEqual(calls, ["ensure", "reset", "close", "reauth", "ensure"]);
+});
+
+test("execute reports the expiry when no re-login is configured", async () => {
+  const { deps } = createDeps();
+  const runner = new ToolRunner(deps, { idleTimeoutMs: 0, stateSaveIntervalMs: 60_000 });
+  const response = await runner.execute(async () => {
+    throw new SessionExpiredError();
+  }, String);
+  assert.equal(response.isError, true);
+  assert.match(response.content[0]!.text, /npm run login/);
+});
+
+test("a permanently failing re-login (MFA) is not attempted a second time", async () => {
+  let logins = 0;
+  const mfa = Object.assign(new Error("MFA required"), { permanent: true });
+  const { deps } = createDeps({
+    reauthenticate: async () => {
+      logins += 1;
+      throw mfa;
+    },
+  });
+  const runner = new ToolRunner(deps, {
+    idleTimeoutMs: 0,
+    stateSaveIntervalMs: 60_000,
+    autoLoginCooldownMs: 0,
+  });
+  const failing = async () => {
+    throw new SessionExpiredError();
+  };
+  const first = await runner.execute(failing, String);
+  const second = await runner.execute(failing, String);
+  assert.equal(first.isError, true);
+  assert.equal(second.isError, true);
+  assert.equal(logins, 1);
+});
+
+test("a transient re-login failure is retried again only after the cooldown", async () => {
+  let logins = 0;
+  const { deps } = createDeps({
+    reauthenticate: async () => {
+      logins += 1;
+      throw new Error("portal unreachable");
+    },
+  });
+  const runner = new ToolRunner(deps, {
+    idleTimeoutMs: 0,
+    stateSaveIntervalMs: 60_000,
+    autoLoginCooldownMs: 40,
+  });
+  const failing = async () => {
+    throw new SessionExpiredError();
+  };
+  await runner.execute(failing, String);
+  await runner.execute(failing, String);
+  assert.equal(logins, 1, "second call is inside the cooldown");
+  await sleep(50);
+  await runner.execute(failing, String);
+  assert.equal(logins, 2);
+});

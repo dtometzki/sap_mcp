@@ -2,8 +2,10 @@ import { createRequire } from "node:module";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { loadDotEnv } from "./env.js";
 import { loadConfig } from "./config.js";
 import { SapSession } from "./session.js";
+import { credentialsFromConfig, performAutoLogin } from "./autoLogin.js";
 import { fetchNote, resetTokenCache, searchNotes } from "./notes.js";
 import {
   downloadAttachment,
@@ -18,8 +20,26 @@ const { version: pkgVersion } = require("../package.json") as { version: string 
 
 const MAX_RESULTS = 25;
 
+// Must run before loadConfig(): MCP clients start the server with a bare environment,
+// so SAPUSER/SAPPASSWORD and the URL overrides come from the .env file next to the install.
+loadDotEnv();
+
 const config = loadConfig();
 const session = new SapSession(config, true);
+const credentials = config.autoLoginEnabled ? credentialsFromConfig(config) : undefined;
+
+/**
+ * Non-interactive re-login for the ToolRunner's recovery path. Undefined when no
+ * credentials are configured, which keeps the previous behaviour (report the expiry and
+ * let the user run `npm run login`) completely unchanged.
+ */
+const reauthenticate = credentials
+  ? async (): Promise<void> => {
+      process.stderr.write("[sap-notes] session expired — attempting automatic login...\n");
+      await performAutoLogin(config, credentials, true);
+      process.stderr.write("[sap-notes] automatic login succeeded.\n");
+    }
+  : undefined;
 
 /**
  * Lazily started so the browser only launches on the first real tool call.
@@ -38,8 +58,13 @@ const runner = new ToolRunner(
     saveState: () => session.saveState(),
     close: () => session.close(),
     resetTokenCache,
+    reauthenticate,
   },
-  { idleTimeoutMs: config.idleTimeoutMs, stateSaveIntervalMs: STATE_SAVE_INTERVAL_MS },
+  {
+    idleTimeoutMs: config.idleTimeoutMs,
+    stateSaveIntervalMs: STATE_SAVE_INTERVAL_MS,
+    autoLoginCooldownMs: config.autoLoginCooldownMs,
+  },
 );
 
 const server = new McpServer({ name: "sap-notes", version: pkgVersion });
@@ -184,7 +209,10 @@ server.registerTool(
       (authenticated) =>
         authenticated
           ? "SAP session is valid and authenticated."
-          : "SAP session is expired. Run `npm run login` to re-authenticate.",
+          : credentials
+            ? "SAP session is expired. The next tool call will attempt an automatic login " +
+              "with the credentials from .env; run `npm run login` if that fails (e.g. MFA)."
+            : "SAP session is expired. Run `npm run login` to re-authenticate.",
       { persistState: false },
     ),
 );

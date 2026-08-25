@@ -13,6 +13,13 @@ export interface ToolRunnerDeps {
   close(): Promise<void>;
   /** Drops cached tokens (Coveo) when the underlying session changes. */
   resetTokenCache(): void;
+  /**
+   * Optional: logs in non-interactively and writes a fresh session state file.
+   * Only wired up when credentials are configured; rejecting means "still logged out".
+   * An error carrying `permanent: true` (MFA, rejected credentials) disables further
+   * attempts for the process lifetime.
+   */
+  reauthenticate?: () => Promise<void>;
 }
 
 export interface ToolRunnerOptions {
@@ -24,6 +31,12 @@ export interface ToolRunnerOptions {
   idleTimeoutMs: number;
   /** Minimum interval between state-file rewrites (throttles saveState). */
   stateSaveIntervalMs: number;
+  /**
+   * After a failed automatic login, suppress further attempts for this long. Without it
+   * every tool call of a client that retries would hammer the SAP identity provider with
+   * the same bad credentials — a reliable way to get an S-user locked.
+   */
+  autoLoginCooldownMs?: number;
 }
 
 export interface ToolResponse {
@@ -70,6 +83,8 @@ export class ToolRunner {
   private lastStateSaveMs = 0;
   private idleTimer: NodeJS.Timeout | undefined;
   private isShuttingDown = false;
+  /** Epoch ms before which no automatic login is attempted; Infinity = permanently off. */
+  private autoLoginBlockedUntilMs = 0;
 
   constructor(
     private readonly deps: ToolRunnerDeps,
@@ -127,6 +142,48 @@ export class ToolRunner {
     }
   }
 
+  /** One attempt: ensure the session, run the operation, persist refreshed cookies. */
+  private async runOnce<T>(operation: () => Promise<T>, persistState: boolean): Promise<T> {
+    await this.deps.ensureSession();
+    const value = await operation();
+    if (persistState) await this.persistSessionState();
+    return value;
+  }
+
+  /**
+   * Attempts a non-interactive re-login. Returns false when it is not configured, still
+   * in the cooldown, or failed — the caller then reports the original expiry message,
+   * which tells the user to run `npm run login`.
+   *
+   * Called from INSIDE the serialized queue, so it closes the session directly instead
+   * of enqueuing (runSerialized here would deadlock on its own slot).
+   */
+  private async tryReauthenticate(): Promise<boolean> {
+    const reauthenticate = this.deps.reauthenticate;
+    if (!reauthenticate) return false;
+    if (Date.now() < this.autoLoginBlockedUntilMs) return false;
+
+    this.deps.resetTokenCache();
+    await this.deps.close().catch(() => undefined);
+    try {
+      await reauthenticate();
+      // The state file was just written by the login; do not overwrite it moments later
+      // with the cookies of the context that is only about to be created.
+      this.lastStateSaveMs = Date.now();
+      return true;
+    } catch (error) {
+      const permanent = error instanceof Error && (error as { permanent?: boolean }).permanent;
+      this.autoLoginBlockedUntilMs = permanent
+        ? Number.POSITIVE_INFINITY
+        : Date.now() + (this.options.autoLoginCooldownMs ?? 5 * 60_000);
+      // stderr only: stdout carries the MCP protocol.
+      process.stderr.write(
+        `[sap-notes] automatic login failed: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+      return false;
+    }
+  }
+
   /**
    * Shared wrapper for every tool call: serializes access, ensures the session,
    * persists refreshed cookies, handles errors, and reschedules the idle timer.
@@ -138,10 +195,15 @@ export class ToolRunner {
   ): Promise<ToolResponse> {
     try {
       const result = await this.runSerialized(async () => {
-        await this.deps.ensureSession();
-        const value = await operation();
-        if (persistState) await this.persistSessionState();
-        return value;
+        try {
+          return await this.runOnce(operation, persistState);
+        } catch (error) {
+          // One automatic login, then one retry — inside the same serialized slot, so
+          // concurrent tool calls can never trigger parallel logins.
+          if (!(error instanceof SessionExpiredError)) throw error;
+          if (!(await this.tryReauthenticate())) throw error;
+          return await this.runOnce(operation, persistState);
+        }
       });
       return { content: [{ type: "text", text: format(result) }] };
     } catch (error) {
