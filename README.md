@@ -8,7 +8,7 @@ authentifizierten Browser-Session (Playwright):
 1. **Einmalig** interaktiv einloggen (`npm run login`) — inkl. MFA, im sichtbaren Browser.
 2. Session (Cookies + localStorage) wird nach `~/.sap-notes-mcp/session.json` (mode 0600) gespeichert.
 3. Der MCP-Server läuft danach **headless** und nutzt diese Session.
-4. Läuft die Session ab und sind `SAPUSER`/`SAPPASSWORD` in der `.env` hinterlegt, meldet
+4. Läuft die Session ab und sind `SAPUSER`/`SAPPASSWORD` hinterlegt (in der Umgebung oder in einer `.env`), meldet
    sich der Server **selbst** neu an und wiederholt den Tool-Aufruf (siehe
    [Automatischer Login](#automatischer-login-sapuser--sappassword)). Ohne Credentials —
    oder wenn SAP MFA verlangt — liefern die Tools eine klare Fehlermeldung → `npm run login`
@@ -149,7 +149,7 @@ unter `sap.com` verfolgt.
 | `SAP_AUTO_LOGIN` | `1` | Automatischen Re-Login des Servers abschalten (`0`), ohne Credentials zu entfernen |
 | `SAP_AUTO_LOGIN_COOLDOWN_MS` | `300000` | Sperrzeit nach fehlgeschlagenem Auto-Login |
 | `SAP_LOGIN_STEP_TIMEOUT_MS` | `30000` | Timeout je Login-Schritt |
-| `SAP_ENV_FILE` | – | Alternativer Pfad zur `.env` |
+| `SAP_ENV_FILE` | – | Alternativer Pfad zur `.env`; exklusiv — kein Rückfall auf eine andere Datei |
 | `SAP_LOGIN_USER_SELECTOR` | `input#j_username, …` | Selektor des Benutzerfelds im Logon-Formular |
 | `SAP_LOGIN_PASSWORD_SELECTOR` | `input#j_password, …` | Selektor des Passwortfelds |
 | `SAP_LOGIN_SUBMIT_SELECTOR` | `#logOnFormSubmit, …` | Selektor des Submit-Buttons |
