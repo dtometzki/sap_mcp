@@ -12,12 +12,30 @@ import { fileURLToPath } from "node:url";
  * add third-party code.
  */
 
+/**
+ * Which process.env keys were filled from the .env file rather than by the real
+ * environment. loadConfig() needs this to resolve aliases by ORIGIN first: an
+ * SAP_USERNAME exported in the shell must beat a SAPUSER that only exists in the file,
+ * even though SAPUSER is the preferred spelling.
+ */
+let fileProvidedKeys = new Set<string>();
+
+export function envKeysFromFile(): ReadonlySet<string> {
+  return fileProvidedKeys;
+}
+
+/** Test helper: forget which keys came from a file. */
+export function resetEnvKeysFromFile(): void {
+  fileProvidedKeys = new Set<string>();
+}
+
 /** Real environment variables always win, so an MCP client's `env` block can override the file. */
 export function applyEnv(values: Record<string, string>): string[] {
   const applied: string[] = [];
   for (const [key, value] of Object.entries(values)) {
     if (process.env[key] !== undefined) continue;
     process.env[key] = value;
+    fileProvidedKeys.add(key);
     applied.push(key);
   }
   return applied;
@@ -66,15 +84,18 @@ function packageRoot(): string {
 }
 
 /**
- * Candidate locations, first existing file wins:
- * SAP_ENV_FILE > <package root>/.env > <cwd>/.env. The package root comes first
- * because the MCP client usually starts the server with an unrelated cwd.
+ * Candidate locations, first existing file wins: <package root>/.env > <cwd>/.env.
+ * The package root comes first because the MCP client usually starts the server with
+ * an unrelated cwd.
+ *
+ * SAP_ENV_FILE is EXCLUSIVE: whoever names a credentials file means that file, and
+ * silently falling back to a different one would log in with the wrong S-user — the
+ * fastest way to get an account locked.
  */
 export function envFileCandidates(): string[] {
-  const explicit = process.env.SAP_ENV_FILE;
-  const candidates = explicit ? [explicit] : [];
-  candidates.push(join(packageRoot(), ".env"), join(process.cwd(), ".env"));
-  return candidates;
+  const explicit = process.env.SAP_ENV_FILE?.trim();
+  if (explicit) return [explicit];
+  return [join(packageRoot(), ".env"), join(process.cwd(), ".env")];
 }
 
 /**
@@ -100,7 +121,8 @@ function warnOnLoosePermissions(path: string): void {
  * when no file exists. Must be called before loadConfig().
  */
 export function loadDotEnv(): string | undefined {
-  for (const path of envFileCandidates()) {
+  const candidates = envFileCandidates();
+  for (const path of candidates) {
     let content: string;
     try {
       content = readFileSync(path, "utf8");
@@ -110,6 +132,14 @@ export function loadDotEnv(): string | undefined {
     warnOnLoosePermissions(path);
     applyEnv(parseDotEnv(content));
     return path;
+  }
+  // Only worth reporting when the user pointed at a specific file: no .env at all is a
+  // perfectly normal setup (everything comes from the process environment).
+  if (process.env.SAP_ENV_FILE?.trim()) {
+    process.stderr.write(
+      `[sap-notes] warning: SAP_ENV_FILE=${candidates[0]} could not be read — ` +
+        `continuing with the process environment only.\n`,
+    );
   }
   return undefined;
 }

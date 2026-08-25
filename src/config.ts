@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { envKeysFromFile } from "./env.js";
 
 /**
  * All portal URLs are configurable: SAP changes the support portal frontend
@@ -123,8 +124,22 @@ export function boolFromEnv(name: string, fallback: boolean): boolean {
   throw new Error(`${name} must be one of 1/0/true/false/yes/no/on/off, got: ${raw}`);
 }
 
-/** Empty strings count as "not set" — an empty SAPPASSWORD= line must not start a login attempt. */
+/**
+ * Resolves a value from several accepted variable names.
+ *
+ * Origin beats spelling: a value exported in the real environment wins over one that
+ * only came from the .env file, even when the file used the preferred name. Otherwise
+ * `SAP_USERNAME=... npm start` would silently keep using the SAPUSER from the file.
+ * Within the same origin the order of `names` decides.
+ *
+ * Empty strings count as "not set" — an empty SAPPASSWORD= line must not start a login attempt.
+ */
 function stringFromEnv(...names: string[]): string | undefined {
+  const fromFile = envKeysFromFile();
+  for (const name of names) {
+    const value = process.env[name]?.trim();
+    if (value && !fromFile.has(name)) return value;
+  }
   for (const name of names) {
     const value = process.env[name]?.trim();
     if (value) return value;

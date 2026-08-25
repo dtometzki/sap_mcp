@@ -7,6 +7,23 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.5.1] – 2026-08-25
+
+### Geändert
+
+- Credentials und Konfiguration werden gleichberechtigt aus der Prozessumgebung
+  gelesen; die `.env` ist ausdrücklich optional. Echte Umgebungsvariablen haben
+  Vorrang — auch über Alt-Namen hinweg: ein exportiertes `SAP_USERNAME` schlägt
+  jetzt ein `SAPUSER`, das nur in der Datei steht (vorher gewann der bevorzugte
+  Name unabhängig von der Herkunft).
+- `SAP_ENV_FILE` ist exklusiv: ist die Variable gesetzt, wird ausschließlich dieser
+  Pfad gelesen. Bisher fiel der Loader still auf `<Repo-Root>/.env` zurück, was zu
+  einer Anmeldung mit dem falschen S-User führen konnte. Ist die angegebene Datei
+  nicht lesbar, warnt der Server auf stderr und arbeitet mit der Prozessumgebung
+  weiter.
+- `npm run login` benennt die tatsächliche Quelle der Credentials (Datei oder
+  Prozessumgebung) statt pauschal `.env`.
+
 ## [1.5.0] – 2026-08-25
 
 ### Hinzugefügt

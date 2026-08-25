@@ -39,16 +39,34 @@ cp .env.example .env   # Werte anpassen
 chmod 600 .env         # enthält ggf. das Passwort
 ```
 
-Reihenfolge der Kandidaten (erste existierende Datei gewinnt):
-`$SAP_ENV_FILE` → `<Repo-Root>/.env` → `$PWD/.env`. Echte Umgebungsvariablen haben
-immer Vorrang, d. h. ein `env`-Block in der MCP-Client-Config überschreibt die Datei.
-Ist die Datei für andere Benutzer lesbar, warnt der Server auf **stderr**.
+Eine `.env` ist **optional** — alle Variablen können genauso aus der Prozessumgebung
+kommen (Shell-Export, `env`-Block in der MCP-Client-Config, systemd `Environment=`,
+Container-Secrets). Regeln:
+
+* **Echte Umgebungsvariablen haben Vorrang** vor Werten aus der Datei.
+* Das gilt auch über Alt-Namen hinweg: ein in der Shell exportiertes `SAP_USERNAME`
+  schlägt ein `SAPUSER`, das nur in der Datei steht. Stammen beide aus derselben
+  Quelle, gewinnt der bevorzugte Name (`SAPUSER` vor `SAP_USERNAME`).
+* Ohne `SAP_ENV_FILE` werden `<Repo-Root>/.env` und dann `$PWD/.env` probiert; die
+  erste existierende Datei gewinnt.
+* `SAP_ENV_FILE` ist **exklusiv**: gesetzt, wird ausschließlich dieser Pfad gelesen und
+  nicht still auf eine andere `.env` zurückgefallen (sonst würde man sich mit dem
+  falschen S-User anmelden). Ist die Datei nicht lesbar, kommt eine Warnung auf stderr
+  und es geht mit der Prozessumgebung weiter.
+* Ist die Datei für andere Benutzer lesbar, warnt der Server ebenfalls auf **stderr**.
 
 ### Automatischer Login (`SAPUSER` / `SAPPASSWORD`)
 
 ```dotenv
 SAPUSER=S0001234567
 SAPPASSWORD=…
+```
+
+oder, ganz ohne Datei:
+
+```bash
+export SAPUSER=S0001234567 SAPPASSWORD=…
+npm start
 ```
 
 Damit gilt:
