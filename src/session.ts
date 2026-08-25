@@ -125,11 +125,19 @@ export class SapSession {
   constructor(
     private readonly config: Config,
     private readonly headless: boolean,
+    /**
+     * Whether starting is allowed without an existing state file. The server
+     * always requires state (a missing session must surface as an actionable
+     * "run login" error); only the automated login flow starts headless with no
+     * session yet in order to create one.
+     */
+    private readonly allowStartWithoutState = false,
   ) {}
 
   /**
-   * Opens the browser and restores the saved session. Throws if no state file exists.
-   * Safe to call concurrently and repeatedly; a failed start can be retried.
+   * Opens the browser and restores the saved session. Throws if no state file exists
+   * (unless allowStartWithoutState was set). Safe to call concurrently and repeatedly;
+   * a failed start can be retried.
    */
   start(): Promise<void> {
     this.startPromise ??= this.doStart().catch((error: unknown) => {
@@ -143,7 +151,7 @@ export class SapSession {
     if (this.context) return;
 
     const hasState = await hasUsableState(this.config.storageStatePath);
-    if (!hasState && this.headless) {
+    if (!hasState && this.headless && !this.allowStartWithoutState) {
       throw new SessionExpiredError();
     }
 

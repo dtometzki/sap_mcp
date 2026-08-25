@@ -7,6 +7,21 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.5.0] – 2026-08-25
+
+### Hinzugefügt
+
+- Optionales nicht-interaktives Login für S-User **ohne MFA**: Sind `SAP_USERNAME`
+  und `SAP_PASSWORD` gesetzt, meldet sich `npm run login` headless am SAP-Identity-
+  Provider an und speichert die Session — ohne sichtbaren Browser. Ohne diese
+  Variablen bleibt es beim bisherigen interaktiven Login. Der MCP-Server selbst
+  liest weiterhin **nie** ein Passwort aus der Umgebung; nur das Login-CLI wertet
+  `SAP_PASSWORD` aus.
+- Die Login-Formularselektoren sind über `SAP_LOGIN_USER_SELECTOR`,
+  `SAP_LOGIN_PASS_SELECTOR` und `SAP_LOGIN_SUBMIT_SELECTOR` konfigurierbar, damit
+  ein geändertes Feld-Layout des Identity-Providers ohne Code-Änderung behebbar
+  bleibt. Der Flow unterstützt ein- wie zweistufige Anmeldeformulare.
+
 ## [1.4.2] – 2026-08-01
 
 ### Behoben

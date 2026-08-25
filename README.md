@@ -26,6 +26,28 @@ npm run login          # sichtbarer Browser: S-User + MFA, dann Enter im Termina
 npm start              # optionaler Smoke-Test (stdio, wartet auf MCP-Client)
 ```
 
+### Nicht-interaktives Login (S-User ohne MFA)
+
+Für unbeaufsichtigte Umgebungen (z. B. ein headless laufender Agent) kann sich
+`npm run login` automatisch anmelden, **sofern der S-User keine MFA erzwingt**:
+
+```bash
+SAP_USERNAME=s0001234567 SAP_PASSWORD='…' npm run login
+```
+
+Sind beide Variablen gesetzt, läuft der Login headless (ohne sichtbaren Browser),
+meldet sich am Identity-Provider an und speichert die Session wie gewohnt nach
+`~/.sap-notes-mcp/session.json`. Fehlt eine der Variablen, bleibt es beim
+interaktiven Login im sichtbaren Browser.
+
+> **Sicherheit:** Der MCP-**Server** liest weiterhin nie ein Passwort aus der
+> Umgebung — nur das Login-CLI wertet `SAP_PASSWORD` aus. Hinterlege das Passwort
+> ausschliesslich über einen Secret-Store, nie im Klartext oder in der MCP-Config.
+> Erzwingt der Account MFA, ist dieser Weg nicht nutzbar (ein zweiter Faktor lässt
+> sich aus gespeicherten Zugangsdaten nicht erfüllen) — dann den interaktiven
+> Login verwenden. Ändert der Identity-Provider sein Formular-Layout, lassen sich
+> die Feldselektoren über `SAP_LOGIN_*_SELECTOR` anpassen.
+
 ### ENV-Variablen laden (optional)
 
 Ab Node 20.6 können ENV-Variablen aus einer `.env`-Datei geladen werden (ohne
@@ -103,7 +125,11 @@ unter `sap.com` verfolgt.
 | `SAP_NETWORK_IDLE_TIMEOUT_MS` | `4000` | Kurze Wartezeit auf Netzwerk-Ruhe |
 | `SAP_RENDER_SETTLE_MS` | `2500` | Wartezeit für spätes SPA-Rendering |
 | `SAP_IDLE_TIMEOUT_MS` | `600000` | Browser nach Inaktivität schließen (0 = deaktiviert) |
-| `SAP_USERNAME` | – | Nur optionales Username-Prefill im Login-CLI (Passwort wird nie aus ENV gelesen) |
+| `SAP_USERNAME` | – | S-User fürs Login-CLI: Prefill (interaktiv) bzw. Anmeldename (nicht-interaktiv) |
+| `SAP_PASSWORD` | – | Nur Login-CLI, aktiviert das nicht-interaktive Login (ohne MFA); der Server liest es nie |
+| `SAP_LOGIN_USER_SELECTOR` | Standard-Kandidaten | Selektor für das Benutzerfeld beim nicht-interaktiven Login |
+| `SAP_LOGIN_PASS_SELECTOR` | Standard-Kandidaten | Selektor für das Passwortfeld beim nicht-interaktiven Login |
+| `SAP_LOGIN_SUBMIT_SELECTOR` | Standard-Kandidaten | Selektor für den Absende-/Weiter-Button beim nicht-interaktiven Login |
 
 ## Wenn SAP das Portal umbaut
 
