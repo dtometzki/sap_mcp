@@ -1,3 +1,4 @@
+import { AutoLoginError } from "./autoLogin.js";
 import { AccessDeniedError, SessionExpiredError } from "./session.js";
 
 /**
@@ -13,6 +14,14 @@ export interface ToolRunnerDeps {
   close(): Promise<void>;
   /** Drops cached tokens (Coveo) when the underlying session changes. */
   resetTokenCache(): void;
+  /**
+   * Optional: re-establishes an authenticated session unattended (env credentials).
+   * Provided only when SAP_USERNAME/SAP_PASSWORD are configured. When present, an
+   * expired session is repaired automatically and the failed tool call is retried
+   * once, so clients never see a "session expired" error they cannot act on. Rejects
+   * with an AutoLoginError (MFA required, wrong credentials) when it cannot recover.
+   */
+  reauthenticate?: () => Promise<void>;
 }
 
 export interface ToolRunnerOptions {
@@ -44,9 +53,13 @@ export interface ExecuteOptions {
   persistState?: boolean;
 }
 
-/** Both error types already carry a complete, actionable message; do not bury it behind a prefix. */
+/** These error types already carry a complete, actionable message; do not bury it behind a prefix. */
 function toErrorText(error: unknown): string {
-  if (error instanceof SessionExpiredError || error instanceof AccessDeniedError) {
+  if (
+    error instanceof SessionExpiredError ||
+    error instanceof AccessDeniedError ||
+    error instanceof AutoLoginError
+  ) {
     return error.message;
   }
   if (error instanceof Error) return `SAP portal request failed: ${error.message}`;
@@ -139,9 +152,21 @@ export class ToolRunner {
     try {
       const result = await this.runSerialized(async () => {
         await this.deps.ensureSession();
-        const value = await operation();
-        if (persistState) await this.persistSessionState();
-        return value;
+        try {
+          const value = await operation();
+          if (persistState) await this.persistSessionState();
+          return value;
+        } catch (error) {
+          if (!(error instanceof SessionExpiredError) || !this.deps.reauthenticate) throw error;
+          // Unattended credentials are configured: drop the dead context, sign back in,
+          // and retry the call once so the client never sees a recoverable expiry.
+          this.deps.resetTokenCache();
+          await this.deps.close().catch(() => undefined);
+          await this.deps.reauthenticate();
+          const value = await operation();
+          if (persistState) await this.persistSessionState();
+          return value;
+        }
       });
       return { content: [{ type: "text", text: format(result) }] };
     } catch (error) {

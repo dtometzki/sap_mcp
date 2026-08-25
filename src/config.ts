@@ -45,9 +45,34 @@ export interface Config {
    * (frees ~200 MB RAM); the next call relaunches it lazily. 0 disables.
    */
   idleTimeoutMs: number;
-  /** Only used by the interactive login CLI to prefill the username field, never by the server. */
+  /**
+   * S-user for the login. Prefills the interactive login CLI and, together with
+   * `password`, enables the server's unattended (headless) login.
+   */
   username: string | undefined;
+  /**
+   * S-user password for the unattended login. Read from SAP_PASSWORD only; when it
+   * (and `username`) are set, the server signs in automatically instead of throwing
+   * "session expired". Never logged and never written anywhere but the browser form.
+   */
+  password: string | undefined;
+  /** CSS selector(s) for the identity provider's username/e-mail field. */
+  loginUsernameSelector: string;
+  /** CSS selector(s) for the identity provider's password field. */
+  loginPasswordSelector: string;
+  /** CSS selector(s) for the "continue"/"log on" submit button (used per step). */
+  loginSubmitSelector: string;
 }
+
+/** Username field on the SAP Identity Service; generic fallbacks for portal changes. */
+const DEFAULT_LOGIN_USERNAME_SELECTOR =
+  "#j_username, input[name='j_username'], input#userid, input[name='username'], input[type='email']";
+/** Password field on the SAP Identity Service; generic fallbacks. */
+const DEFAULT_LOGIN_PASSWORD_SELECTOR =
+  "#j_password, input[name='j_password'], input[type='password']";
+/** Submit button; the SAP Identity Service reuses one id across the two login steps. */
+const DEFAULT_LOGIN_SUBMIT_SELECTOR =
+  "#logOnFormSubmit, button[type='submit'], input[type='submit']";
 
 const DEFAULT_STATE_PATH = join(homedir(), ".sap-notes-mcp", "session.json");
 const DEFAULT_ATTACHMENT_DIR = join(homedir(), "Downloads", "sap-notes");
@@ -96,6 +121,12 @@ export function loadConfig(): Config {
     renderSettleMs: intFromEnv("SAP_RENDER_SETTLE_MS", 2_500),
     idleTimeoutMs: intFromEnv("SAP_IDLE_TIMEOUT_MS", 10 * 60_000, 0),
     username: process.env.SAP_USERNAME,
+    password: process.env.SAP_PASSWORD,
+    loginUsernameSelector:
+      process.env.SAP_LOGIN_USERNAME_SELECTOR ?? DEFAULT_LOGIN_USERNAME_SELECTOR,
+    loginPasswordSelector:
+      process.env.SAP_LOGIN_PASSWORD_SELECTOR ?? DEFAULT_LOGIN_PASSWORD_SELECTOR,
+    loginSubmitSelector: process.env.SAP_LOGIN_SUBMIT_SELECTOR ?? DEFAULT_LOGIN_SUBMIT_SELECTOR,
   };
 }
 

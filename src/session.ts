@@ -147,10 +147,31 @@ export class SapSession {
       throw new SessionExpiredError();
     }
 
+    await this.launchContext(hasState);
+  }
+
+  /**
+   * Launches a fresh, unauthenticated context so an unattended login can drive the
+   * identity-provider form and fill the cookie jar. Unlike start(), this never throws
+   * when the state file is missing — that is the whole point of logging in — so the
+   * server can recover from an expired session headlessly. Idempotent and
+   * concurrency-safe like start(); saveState() persists the result.
+   */
+  startForLogin(): Promise<void> {
+    this.startPromise ??= this.launchContext(false).catch((error: unknown) => {
+      this.startPromise = undefined;
+      throw error;
+    });
+    return this.startPromise;
+  }
+
+  private async launchContext(useState: boolean): Promise<void> {
+    if (this.context) return;
+
     this.browser = await chromium.launch({ headless: this.headless });
     try {
       this.context = await this.browser.newContext({
-        storageState: hasState ? this.config.storageStatePath : undefined,
+        storageState: useState ? this.config.storageStatePath : undefined,
         viewport: { width: 1440, height: 900 },
         locale: "en-US",
       });

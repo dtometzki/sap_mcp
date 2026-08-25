@@ -7,6 +7,30 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.5.0] – 2026-08-25
+
+### Hinzugefügt
+
+- Automatischer, unbeaufsichtigter Login: Sind `SAP_USERNAME` und `SAP_PASSWORD`
+  gesetzt, meldet sich der Server bei fehlender oder abgelaufener Session selbst
+  headless am SAP Identity Service an, speichert die Session und wiederholt den
+  fehlgeschlagenen Tool-Aufruf einmal — ohne manuelles `npm run login`. Bei einer
+  MFA-Abfrage (`MfaRequiredError`) oder falschen Zugangsdaten (`LoginFailedError`)
+  bricht er mit einer klaren Meldung ab, statt am Formular zu hängen.
+- `npm run login` nutzt bei gesetzten `SAP_USERNAME`/`SAP_PASSWORD` denselben
+  automatischen Ablauf zum Vorbefüllen der Session; `--interactive` erzwingt weiter
+  den sichtbaren Browser-Login.
+- Konfigurierbare Login-Selektoren (`SAP_LOGIN_USERNAME_SELECTOR`,
+  `SAP_LOGIN_PASSWORD_SELECTOR`, `SAP_LOGIN_SUBMIT_SELECTOR`), damit ein Umbau der
+  SAP-Anmeldeseite ohne Code-Änderung behebbar bleibt.
+
+### Geändert
+
+- `SAP_PASSWORD` wird jetzt bewusst aus der Umgebung gelesen (zuvor nie). Das Passwort
+  wird ausschließlich in das Browser-Formular eingetippt, nie geloggt oder in Dateien
+  geschrieben. Ohne gesetzte Zugangsdaten bleibt das Verhalten unverändert: Tools
+  liefern weiterhin die klare `npm run login`-Meldung.
+
 ## [1.4.2] – 2026-08-01
 
 ### Behoben

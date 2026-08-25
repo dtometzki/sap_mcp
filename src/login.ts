@@ -1,7 +1,27 @@
 import { createInterface } from "node:readline/promises";
-import { stdin, stdout } from "node:process";
+import { argv, stdin, stdout } from "node:process";
 import { loadConfig } from "./config.js";
 import { SapSession } from "./session.js";
+import { credentialsConfigured, performAutomatedLogin } from "./autoLogin.js";
+
+/**
+ * Unattended login for CI/servers: uses SAP_USERNAME + SAP_PASSWORD to sign in headless
+ * and save the session. Fails clearly if the S-user requires MFA (use interactive login
+ * then). The MCP server does this on its own; this is only for pre-seeding the session.
+ */
+async function automatedLogin(): Promise<void> {
+  const config = loadConfig();
+  const session = new SapSession(config, true);
+  try {
+    await session.startForLogin();
+    await performAutomatedLogin(session, config);
+    await session.saveState();
+    console.log(`\nSession saved to ${config.storageStatePath} (mode 0600).`);
+    console.log("The MCP server can now run headless.");
+  } finally {
+    await session.close();
+  }
+}
 
 /**
  * Interactive login. Run once per machine (and again whenever the session expires).
@@ -9,7 +29,7 @@ import { SapSession } from "./session.js";
  * Credentials are optional — typing them into the browser yourself is the safer path,
  * because nothing is then read from the environment.
  */
-async function main(): Promise<void> {
+async function interactiveLogin(): Promise<void> {
   const config = loadConfig();
   const session = new SapSession(config, false);
   const rl = createInterface({ input: stdin, output: stdout });
@@ -45,6 +65,22 @@ async function main(): Promise<void> {
     rl.close();
     await session.close();
   }
+}
+
+/**
+ * Picks the login mode: automated when SAP_USERNAME/SAP_PASSWORD are set (skip with
+ * `--interactive`), interactive otherwise. Interactive is the safer default because the
+ * password is then never read from the environment.
+ */
+async function main(): Promise<void> {
+  const config = loadConfig();
+  const forceInteractive = argv.includes("--interactive");
+  if (credentialsConfigured(config) && !forceInteractive) {
+    console.log("SAP_USERNAME/SAP_PASSWORD detected — attempting automatic login...");
+    await automatedLogin();
+    return;
+  }
+  await interactiveLogin();
 }
 
 main().catch((error: unknown) => {

@@ -3,15 +3,30 @@
 MCP-Server für die Suche in SAP Notes / KBAs im **geschützten** SAP-Support-Bereich.
 
 Da SAP keine offizielle Notes-API anbietet, arbeitet der Server mit einer
-authentifizierten Browser-Session (Playwright):
+authentifizierten Browser-Session (Playwright). Es gibt zwei Wege, an diese Session zu
+kommen:
+
+**A) Automatischer Login (empfohlen für Server/CI ohne MFA)**
+
+Sind `SAP_USERNAME` und `SAP_PASSWORD` gesetzt, meldet sich der Server bei fehlender oder
+abgelaufener Session **selbst headless** an, speichert die Session und wiederholt den
+fehlgeschlagenen Tool-Aufruf einmal — kein manuelles `npm run login` nötig. Verlangt der
+Identity Provider einen zweiten Faktor, bricht der Server mit einer klaren MFA-Meldung ab;
+dann ist Weg B nötig. Das Passwort wird ausschließlich in das Browser-Formular eingetippt,
+nie geloggt oder in eine Datei geschrieben.
+
+**B) Interaktiver Login (nötig bei MFA)**
 
 1. **Einmalig** interaktiv einloggen (`npm run login`) — inkl. MFA, im sichtbaren Browser.
+   (Bei gesetzten `SAP_USERNAME`/`SAP_PASSWORD` läuft `npm run login` automatisch; mit
+   `npm run login -- --interactive` wird der sichtbare Browser erzwungen.)
 2. Session (Cookies + localStorage) wird nach `~/.sap-notes-mcp/session.json` (mode 0600) gespeichert.
 3. Der MCP-Server läuft danach **headless** und nutzt diese Session.
-4. Läuft die Session ab, liefern die Tools eine klare Fehlermeldung → `npm run login` erneut
-   ausführen und die Anfrage einfach wiederholen — der Server liest die neue Session ohne
-   Neustart ein. Fehlt dem S-User dagegen nur die **Berechtigung** für eine bestimmte Note
-   (HTTP 403), wird das als solches gemeldet; ein erneuter Login ändert daran nichts.
+4. Läuft die Session ab, liefern die Tools ohne Zugangsdaten eine klare Fehlermeldung →
+   `npm run login` erneut ausführen und die Anfrage einfach wiederholen — der Server liest
+   die neue Session ohne Neustart ein. Fehlt dem S-User dagegen nur die **Berechtigung**
+   für eine bestimmte Note (HTTP 403), wird das als solches gemeldet; ein erneuter Login
+   ändert daran nichts.
 5. Nach längerer Inaktivität (Default 10 min) beendet der Server den headless Browser,
    um RAM zu sparen; der nächste Tool-Aufruf startet ihn automatisch neu.
 
@@ -103,7 +118,11 @@ unter `sap.com` verfolgt.
 | `SAP_NETWORK_IDLE_TIMEOUT_MS` | `4000` | Kurze Wartezeit auf Netzwerk-Ruhe |
 | `SAP_RENDER_SETTLE_MS` | `2500` | Wartezeit für spätes SPA-Rendering |
 | `SAP_IDLE_TIMEOUT_MS` | `600000` | Browser nach Inaktivität schließen (0 = deaktiviert) |
-| `SAP_USERNAME` | – | Nur optionales Username-Prefill im Login-CLI (Passwort wird nie aus ENV gelesen) |
+| `SAP_USERNAME` | – | S-User für Login-Prefill und (zusammen mit `SAP_PASSWORD`) den automatischen Login |
+| `SAP_PASSWORD` | – | S-User-Passwort für den automatischen Login. Nur gesetzt → automatischer Login aktiv; wird nie geloggt/gespeichert |
+| `SAP_LOGIN_USERNAME_SELECTOR` | SAP-ID-Service-Defaults | CSS-Selektor(en) des Benutzernamen-/E-Mail-Felds |
+| `SAP_LOGIN_PASSWORD_SELECTOR` | SAP-ID-Service-Defaults | CSS-Selektor(en) des Passwort-Felds |
+| `SAP_LOGIN_SUBMIT_SELECTOR` | SAP-ID-Service-Defaults | CSS-Selektor(en) des „Weiter“/„Anmelden“-Buttons |
 
 ## Wenn SAP das Portal umbaut
 

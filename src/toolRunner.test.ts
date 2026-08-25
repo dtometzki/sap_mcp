@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
 import test from "node:test";
+import { MfaRequiredError } from "./autoLogin.js";
 import { AccessDeniedError, SessionExpiredError } from "./session.js";
 import { ToolRunner, type ToolRunnerDeps } from "./toolRunner.js";
 
@@ -93,6 +94,40 @@ test("execute recovers from SessionExpiredError: close + token reset, clear mess
   assert.ok(calls.includes("close"));
   assert.ok(calls.includes("reset"));
   // A non-expiry error in the same runner must not have torn down anything before.
+});
+
+test("execute re-logins and retries once on SessionExpiredError when reauthenticate is set", async () => {
+  const { deps, calls } = createDeps({
+    reauthenticate: async () => {
+      calls.push("reauth");
+    },
+  });
+  const runner = new ToolRunner(deps, { idleTimeoutMs: 0, stateSaveIntervalMs: 60_000 });
+  let attempts = 0;
+  const response = await runner.execute(async () => {
+    attempts += 1;
+    if (attempts === 1) throw new SessionExpiredError();
+    return "recovered";
+  }, String);
+  assert.equal(response.isError, undefined);
+  assert.equal(response.content[0]!.text, "recovered");
+  assert.equal(attempts, 2);
+  // Dead context is dropped (reset + close) before the re-login, and the retry persists.
+  assert.deepEqual(calls, ["ensure", "reset", "close", "reauth", "save"]);
+});
+
+test("execute surfaces the AutoLoginError when unattended re-login cannot recover", async () => {
+  const { deps } = createDeps({
+    reauthenticate: async () => {
+      throw new MfaRequiredError();
+    },
+  });
+  const runner = new ToolRunner(deps, { idleTimeoutMs: 0, stateSaveIntervalMs: 60_000 });
+  const response = await runner.execute(async () => {
+    throw new SessionExpiredError();
+  }, String);
+  assert.equal(response.isError, true);
+  assert.match(response.content[0]!.text, /multi-factor/);
 });
 
 test("execute leaves the session alone on AccessDeniedError", async () => {

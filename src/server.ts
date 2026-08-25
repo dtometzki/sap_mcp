@@ -3,7 +3,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { loadConfig } from "./config.js";
-import { SapSession } from "./session.js";
+import { SapSession, SessionExpiredError } from "./session.js";
+import { credentialsConfigured, performAutomatedLogin } from "./autoLogin.js";
 import { fetchNote, resetTokenCache, searchNotes } from "./notes.js";
 import {
   downloadAttachment,
@@ -20,13 +21,39 @@ const MAX_RESULTS = 25;
 
 const config = loadConfig();
 const session = new SapSession(config, true);
+const autoLoginEnabled = credentialsConfigured(config);
+
+/**
+ * Signs in unattended with SAP_USERNAME / SAP_PASSWORD and persists the fresh session.
+ * On any failure the half-open login context is torn down so the next attempt starts clean.
+ */
+async function loginWithCredentials(): Promise<void> {
+  await session.startForLogin();
+  try {
+    await performAutomatedLogin(session, config);
+    await session.saveState();
+  } catch (error) {
+    await session.close().catch(() => undefined);
+    throw error;
+  }
+}
 
 /**
  * Lazily started so the browser only launches on the first real tool call.
  * SapSession.start() is idempotent and concurrency-safe, so no extra flag needed.
+ * When credentials are configured, a missing/expired stored session triggers an
+ * automatic headless login instead of surfacing "session expired" to the client.
  */
-function ensureSession(): Promise<void> {
-  return session.start();
+async function ensureSession(): Promise<void> {
+  try {
+    await session.start();
+  } catch (error) {
+    if (error instanceof SessionExpiredError && autoLoginEnabled) {
+      await loginWithCredentials();
+      return;
+    }
+    throw error;
+  }
 }
 
 /** Persist refreshed cookies at most this often; see ToolRunner.persistSessionState(). */
@@ -38,6 +65,9 @@ const runner = new ToolRunner(
     saveState: () => session.saveState(),
     close: () => session.close(),
     resetTokenCache,
+    // Only wire unattended recovery when credentials exist; otherwise an expired
+    // session keeps its actionable "run npm run login" message.
+    reauthenticate: autoLoginEnabled ? loginWithCredentials : undefined,
   },
   { idleTimeoutMs: config.idleTimeoutMs, stateSaveIntervalMs: STATE_SAVE_INTERVAL_MS },
 );
