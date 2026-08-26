@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { boolFromEnv, intFromEnv, loadConfig } from "./config.js";
+import { boolFromEnv, hostListFromEnv, intFromEnv, loadConfig } from "./config.js";
 import { applyEnv, resetEnvKeysFromFile } from "./env.js";
 
 const TEST_VAR = "SAP_TEST_INT_FROM_ENV";
@@ -141,6 +141,20 @@ test("loadConfig rejects non-SAP portal URLs and a crafted Coveo org", () => {
     assert.throws(() => loadConfig(), /SAP_COVEO_ORG must contain only/);
   } finally {
     clearUrlVars();
+  }
+});
+
+test("hostListFromEnv parses extra attachment cookie hosts", () => {
+  const name = "SAP_TEST_HOST_LIST";
+  try {
+    delete process.env[name];
+    assert.deepEqual(hostListFromEnv(name), []);
+    process.env[name] = "softwaredownloads.sap.com, cdn.sap.com";
+    assert.deepEqual(hostListFromEnv(name), ["softwaredownloads.sap.com", "cdn.sap.com"]);
+    process.env[name] = "not a host";
+    assert.throws(() => hostListFromEnv(name), /invalid hostname/);
+  } finally {
+    delete process.env[name];
   }
 });
 

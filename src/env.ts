@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,6 +27,9 @@ export function envKeysFromFile(): ReadonlySet<string> {
 /** Variable names that may carry the S-user password (preferred spelling first). */
 export const PASSWORD_ENV_KEYS = ["SAPPASSWORD", "SAP_PASSWORD"] as const;
 
+/** Variable names that may carry the S-user id (preferred spelling first). */
+export const USERNAME_ENV_KEYS = ["SAPUSER", "SAP_USERNAME"] as const;
+
 /**
  * Removes the password from process.env once loadConfig() has copied it.
  *
@@ -35,15 +38,29 @@ export const PASSWORD_ENV_KEYS = ["SAPPASSWORD", "SAP_PASSWORD"] as const;
  * password is only ever needed as a value inside the Config object, so it must not
  * stay in the environment for the lifetime of the server. Returns the removed keys.
  */
-export function scrubPasswordFromEnv(): string[] {
+function scrubKeys(keys: readonly string[]): string[] {
   const removed: string[] = [];
-  for (const key of PASSWORD_ENV_KEYS) {
+  for (const key of keys) {
     if (process.env[key] === undefined) continue;
     delete process.env[key];
     fileProvidedKeys.delete(key);
     removed.push(key);
   }
   return removed;
+}
+
+export function scrubPasswordFromEnv(): string[] {
+  return scrubKeys(PASSWORD_ENV_KEYS);
+}
+
+/** Drops the S-user id so Chromium and crash reports do not inherit it. */
+export function scrubUsernameFromEnv(): string[] {
+  return scrubKeys(USERNAME_ENV_KEYS);
+}
+
+/** Password and username — call after loadConfig() has copied both into Config. */
+export function scrubCredentialsFromEnv(): string[] {
+  return [...scrubPasswordFromEnv(), ...scrubUsernameFromEnv()];
 }
 
 /** Test helper: forget which keys came from a file. */
@@ -124,6 +141,25 @@ export function envFileCandidates(): string[] {
  * Warns (stderr, never stdout — stdout is the MCP protocol channel) when the file
  * holding the password is readable by other local users.
  */
+/**
+ * Only regular files are loaded. Directories, devices and FIFOs are skipped.
+ * Symlinks are followed (common for `/etc/…` → secret store) but warned about.
+ */
+export function inspectEnvFile(path: string): "ok" | "missing" | "not-file" {
+  try {
+    const link = lstatSync(path);
+    if (link.isSymbolicLink()) {
+      process.stderr.write(
+        `[sap-notes] warning: ${path} is a symlink — reading the resolved target.\n`,
+      );
+    }
+    if (!statSync(path).isFile()) return "not-file";
+    return "ok";
+  } catch {
+    return "missing";
+  }
+}
+
 function warnOnLoosePermissions(path: string): void {
   try {
     const mode = statSync(path).mode & 0o777;
@@ -145,6 +181,14 @@ function warnOnLoosePermissions(path: string): void {
 export function loadDotEnv(): string | undefined {
   const candidates = envFileCandidates();
   for (const path of candidates) {
+    const kind = inspectEnvFile(path);
+    if (kind === "missing") continue;
+    if (kind === "not-file") {
+      process.stderr.write(
+        `[sap-notes] warning: ${path} is not a regular file — skipping.\n`,
+      );
+      continue;
+    }
     let content: string;
     try {
       content = readFileSync(path, "utf8");

@@ -170,6 +170,8 @@ export class SapSession {
         storageState: hasState ? this.config.storageStatePath : undefined,
         viewport: { width: 1440, height: 900 },
         locale: "en-US",
+        // Tool downloads go through fetchAllowedAttachment, not the browser.
+        acceptDownloads: false,
       });
     } catch (error) {
       // Do not leak the browser process if the context (e.g. corrupt state file) fails.

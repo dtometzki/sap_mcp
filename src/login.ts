@@ -2,7 +2,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { loadConfig } from "./config.js";
 import { SapSession } from "./session.js";
-import { envKeysFromFile, loadDotEnv, scrubPasswordFromEnv } from "./env.js";
+import { envKeysFromFile, loadDotEnv, scrubCredentialsFromEnv } from "./env.js";
 import {
   credentialsFromConfig,
   fillLoginForm,
@@ -25,7 +25,7 @@ async function main(): Promise<void> {
   const credentials = credentialsFromConfig(config);
   // Name the actual source, so a stale .env is not blamed for a shell export (or vice versa).
   const fromFile = envKeysFromFile().has("SAPPASSWORD") || envKeysFromFile().has("SAP_PASSWORD");
-  scrubPasswordFromEnv(); // before the visible browser is launched
+  scrubCredentialsFromEnv(); // before the visible browser is launched
   const session = new SapSession(config, false);
   const rl = createInterface({ input: stdin, output: stdout });
 

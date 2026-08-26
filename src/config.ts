@@ -25,6 +25,11 @@ export interface Config {
   noteDetailApiUrlTemplate: string;
   /** Directory attachments are downloaded to (one subfolder per note number). */
   attachmentDirPath: string;
+  /**
+   * Extra hostnames that may receive session cookies on an attachment download
+   * (in addition to me.sap.com / support.sap.com / accounts.sap.com).
+   */
+  attachmentCookieHosts: string[];
   /** URL used to verify that the stored session is still valid. */
   sessionProbeUrl: string;
   /** Milliseconds to wait for portal pages (SPA, slow backend). */
@@ -148,6 +153,22 @@ function stringFromEnv(...names: string[]): string | undefined {
   return undefined;
 }
 
+/** Comma-separated hostnames, e.g. `softwaredownloads.sap.com,cdn.sap.com`. */
+export function hostListFromEnv(name: string): string[] {
+  const raw = process.env[name];
+  if (raw === undefined) return [];
+  const hosts: string[] = [];
+  for (const part of raw.split(",")) {
+    const host = part.trim().toLowerCase();
+    if (host === "") continue;
+    if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/.test(host)) {
+      throw new Error(`${name} contains an invalid hostname: ${part}`);
+    }
+    hosts.push(host);
+  }
+  return hosts;
+}
+
 function assertConfigUrl(
   name: string,
   template: string,
@@ -201,6 +222,7 @@ export function loadConfig(): Config {
     noteUrlTemplate,
     noteDetailApiUrlTemplate,
     attachmentDirPath: expandHomePath(process.env.SAP_ATTACHMENT_DIR ?? DEFAULT_ATTACHMENT_DIR),
+    attachmentCookieHosts: hostListFromEnv("SAP_ATTACHMENT_COOKIE_HOSTS"),
     sessionProbeUrl,
     navigationTimeoutMs: intFromEnv("SAP_NAV_TIMEOUT_MS", 60_000),
     apiTimeoutMs: intFromEnv("SAP_API_TIMEOUT_MS", 60_000),

@@ -10,6 +10,7 @@ import {
   isTransientError,
   mapCoveoResult,
   parseCoveoResponse,
+  wrapUntrustedPortalContent,
 } from "./notes.js";
 import {
   AccessDeniedError,
@@ -446,6 +447,17 @@ test("isTextAttachment recognizes text by content type and extension", () => {
   assert.equal(isTextAttachment("export.csv", ""), true);
   assert.equal(isTextAttachment("archive.zip", "application/zip"), false);
   assert.equal(isTextAttachment("sheet.xlsx", "application/octet-stream"), false);
+  assert.equal(isTextAttachment("page.html", "text/html"), false);
+  assert.equal(isTextAttachment("app.js", "application/javascript"), false);
+  assert.equal(isTextAttachment("note.txt", "text/html"), false);
+});
+
+test("wrapUntrustedPortalContent adds delimiters without changing the body", () => {
+  const wrapped = wrapUntrustedPortalContent("SAP Note 1", "# title\n\nbody");
+  assert.match(wrapped, /untrusted third-party content/);
+  assert.match(wrapped, /BEGIN SAP NOTE 1/);
+  assert.match(wrapped, /# title\n\nbody/);
+  assert.match(wrapped, /END SAP NOTE 1/);
 });
 
 const TWO_ATTACHMENTS = [

@@ -2,7 +2,8 @@ import { chmod, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { loadConfig } from "./config.js";
-import { scrubPasswordFromEnv } from "./env.js";
+import { scrubCredentialsFromEnv } from "./env.js";
+import { redactUrlForLog } from "./urls.js";
 import { SapSession } from "./session.js";
 
 /**
@@ -55,7 +56,7 @@ function redactSecret(value: string, secret: string): string {
 async function main(): Promise<void> {
   const query = process.argv.slice(2).join(" ").trim() || "HANA Revision";
   const config = loadConfig();
-  scrubPasswordFromEnv(); // diagnostics never log in; keep the password away from Chromium
+  scrubCredentialsFromEnv(); // diagnostics never log in; keep credentials away from Chromium
   const session = new SapSession(config, false);
   await session.start();
   try {
@@ -127,19 +128,20 @@ async function main(): Promise<void> {
 
     const report = {
       query,
-      finalUrl: page.url(),
+      finalUrl: redactUrlForLog(page.url()),
       coveoTrafficCount: coveo.length,
       coveo: coveo.map((record) => ({
         ...record,
+        url: redactUrlForLog(record.url),
         headers: redactHeaders(record.headers),
         body: redactSecret(record.body, bearer),
       })),
       tokenPresent: Boolean(bearer),
       tokenOrigins: tokenOrigins.map((origin) => ({
-        ...origin,
+        url: redactUrlForLog(origin.url),
         bodyPreview: redactSecret(origin.bodyPreview, bearer),
       })),
-      allXhrUrls: [...new Set(allResponses.map((r) => r.url))],
+      allXhrUrls: [...new Set(allResponses.map((r) => redactUrlForLog(r.url)))],
     };
     const reportPath = "diagnose-coveo.json";
     await writeFile(reportPath, JSON.stringify(report, null, 2), {

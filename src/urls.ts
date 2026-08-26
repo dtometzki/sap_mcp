@@ -15,6 +15,17 @@ export const API_HOST_ROOTS = ["sap.com", "sap.cn", "coveo.com"] as const;
 /** Attachment downloads stay on sap.com — cookies must not follow a rewritten URL. */
 export const ATTACHMENT_HOST_ROOTS = ["sap.com"] as const;
 
+/**
+ * Hosts that may receive the session cookie jar on an attachment download.
+ * Other *.sap.com hosts (campaign sites, forgotten subdomains) are still
+ * downloadable, but only without cookies — signed URLs keep working.
+ */
+export const DEFAULT_ATTACHMENT_COOKIE_HOSTS = [
+  "me.sap.com",
+  "support.sap.com",
+  "accounts.sap.com",
+] as const;
+
 export function hostMatches(hostname: string, roots: readonly string[]): boolean {
   const host = hostname.toLowerCase();
   return roots.some((root) => host === root || host.endsWith(`.${root}`));
@@ -50,6 +61,33 @@ export function isAllowedApiUrl(url: string): boolean {
 
 export function isAllowedAttachmentHost(url: string): boolean {
   return parseAllowedHttpsUrl(url, ATTACHMENT_HOST_ROOTS) !== undefined;
+}
+
+export function isTrustedAttachmentCookieHost(
+  url: string,
+  extraHosts: readonly string[] = [],
+): boolean {
+  const parsed = parseAllowedHttpsUrl(url, ATTACHMENT_HOST_ROOTS);
+  if (!parsed) return false;
+  const host = parsed.hostname.toLowerCase();
+  const trusted = [...DEFAULT_ATTACHMENT_COOKIE_HOSTS, ...extraHosts].map((entry) =>
+    entry.toLowerCase(),
+  );
+  return trusted.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
+}
+
+/** Drops query, hash and userinfo so logs cannot persist access tokens. */
+export function redactUrlForLog(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.username = "";
+    parsed.password = "";
+    parsed.hash = "";
+    if (parsed.search) parsed.search = "?[redacted]";
+    return parsed.toString();
+  } catch {
+    return url;
+  }
 }
 
 export function assertAllowedPageUrl(url: string, subject = "navigation"): void {

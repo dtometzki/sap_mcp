@@ -7,6 +7,8 @@ import {
   isAllowedAttachmentHost,
   isAllowedLoginUrl,
   isAllowedPageUrl,
+  isTrustedAttachmentCookieHost,
+  redactUrlForLog,
 } from "./urls.js";
 
 test("page and login URLs allow the SAP portal and identity hosts", () => {
@@ -56,6 +58,29 @@ test("attachment hosts stay on https sap.com (no coveo, no sap.cn, no userinfo)"
   assert.equal(isAllowedAttachmentHost("https://org.coveo.com/dl/1"), false);
   assert.equal(isAllowedAttachmentHost("https://evil@me.sap.com/dl/1"), false);
   assert.equal(isAllowedAttachmentHost("https://sap.com.evil.example/x"), false);
+});
+
+test("attachment cookies are limited to portal hosts, not every sap.com subdomain", () => {
+  assert.equal(isTrustedAttachmentCookieHost("https://me.sap.com/dl/1"), true);
+  assert.equal(isTrustedAttachmentCookieHost("https://launchpad.support.sap.com/x"), true);
+  assert.equal(isTrustedAttachmentCookieHost("https://support.sap.com/files/1"), true);
+  assert.equal(isTrustedAttachmentCookieHost("https://accounts.sap.com/x"), true);
+  assert.equal(isTrustedAttachmentCookieHost("https://campaign.sap.com/dl/1"), false);
+  assert.equal(isTrustedAttachmentCookieHost("https://evil.example/x"), false);
+  assert.equal(
+    isTrustedAttachmentCookieHost("https://softwaredownloads.sap.com/x", [
+      "softwaredownloads.sap.com",
+    ]),
+    true,
+  );
+});
+
+test("redactUrlForLog strips query, hash and userinfo", () => {
+  assert.equal(
+    redactUrlForLog("https://me.sap.com/search?q=secret&token=abc#frag"),
+    "https://me.sap.com/search?[redacted]",
+  );
+  assert.equal(redactUrlForLog("https://me.sap.com/notes/1"), "https://me.sap.com/notes/1");
 });
 
 test("assert helpers name the rejected URL", () => {
