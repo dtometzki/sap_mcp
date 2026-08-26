@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { envKeysFromFile } from "./env.js";
+import { isAllowedApiUrl, isAllowedPageUrl } from "./urls.js";
 
 /**
  * All portal URLs are configurable: SAP changes the support portal frontend
@@ -147,27 +148,60 @@ function stringFromEnv(...names: string[]): string | undefined {
   return undefined;
 }
 
+function assertConfigUrl(
+  name: string,
+  template: string,
+  placeholders: Record<string, string>,
+  allowed: (url: string) => boolean,
+  hint: string,
+): void {
+  const resolved =
+    Object.keys(placeholders).length > 0 ? buildUrl(template, placeholders) : template;
+  if (!allowed(resolved)) {
+    throw new Error(`${name} must be an https URL on ${hint}, got: ${template}`);
+  }
+}
+
 export function loadConfig(): Config {
   const coveoOrg = process.env.SAP_COVEO_ORG ?? "sapamericaproductiontyfzmfz0";
+  if (!/^[A-Za-z0-9-]+$/.test(coveoOrg)) {
+    throw new Error(`SAP_COVEO_ORG must contain only letters, digits and hyphens, got: ${coveoOrg}`);
+  }
   // SAPUSER/SAPPASSWORD are the documented names; the older SAP_* spellings stay valid.
   const username = stringFromEnv("SAPUSER", "SAP_USERNAME");
   const password = stringFromEnv("SAPPASSWORD", "SAP_PASSWORD");
+  const searchUrlTemplate =
+    process.env.SAP_SEARCH_URL ?? "https://me.sap.com/search?q={query}&tab=notes";
+  const coveoTokenUrl =
+    process.env.SAP_COVEO_TOKEN_URL ?? "https://me.sap.com/backend/raw/coveo/CoveoToken";
+  const coveoSearchUrl =
+    process.env.SAP_COVEO_SEARCH_URL ??
+    `https://${coveoOrg}.org.coveo.com/rest/search/v2?organizationId=${coveoOrg}`;
+  const noteUrlTemplate = process.env.SAP_NOTE_URL ?? "https://me.sap.com/notes/{id}";
+  const noteDetailApiUrlTemplate =
+    process.env.SAP_NOTE_API_URL ??
+    "https://me.sap.com/backend/raw/sapnotes/Detail?q={id}&t=E&isVTEnabled=false";
+  const sessionProbeUrl = process.env.SAP_PROBE_URL ?? "https://me.sap.com/notes/2170696";
+
+  const pageHint = "sap.com or sap.cn";
+  const apiHint = "sap.com, sap.cn or coveo.com";
+  assertConfigUrl("SAP_SEARCH_URL", searchUrlTemplate, { query: "q" }, isAllowedPageUrl, pageHint);
+  assertConfigUrl("SAP_COVEO_TOKEN_URL", coveoTokenUrl, {}, isAllowedPageUrl, pageHint);
+  assertConfigUrl("SAP_COVEO_SEARCH_URL", coveoSearchUrl, {}, isAllowedApiUrl, apiHint);
+  assertConfigUrl("SAP_NOTE_URL", noteUrlTemplate, { id: "1" }, isAllowedPageUrl, pageHint);
+  assertConfigUrl("SAP_NOTE_API_URL", noteDetailApiUrlTemplate, { id: "1" }, isAllowedPageUrl, pageHint);
+  assertConfigUrl("SAP_PROBE_URL", sessionProbeUrl, {}, isAllowedPageUrl, pageHint);
+
   return {
     storageStatePath: process.env.SAP_STATE_PATH ?? DEFAULT_STATE_PATH,
-    searchUrlTemplate:
-      process.env.SAP_SEARCH_URL ?? "https://me.sap.com/search?q={query}&tab=notes",
-    coveoTokenUrl:
-      process.env.SAP_COVEO_TOKEN_URL ?? "https://me.sap.com/backend/raw/coveo/CoveoToken",
-    coveoSearchUrl:
-      process.env.SAP_COVEO_SEARCH_URL ??
-      `https://${coveoOrg}.org.coveo.com/rest/search/v2?organizationId=${coveoOrg}`,
+    searchUrlTemplate,
+    coveoTokenUrl,
+    coveoSearchUrl,
     coveoSearchHub: process.env.SAP_COVEO_SEARCH_HUB ?? "SAP for Me",
-    noteUrlTemplate: process.env.SAP_NOTE_URL ?? "https://me.sap.com/notes/{id}",
-    noteDetailApiUrlTemplate:
-      process.env.SAP_NOTE_API_URL ??
-      "https://me.sap.com/backend/raw/sapnotes/Detail?q={id}&t=E&isVTEnabled=false",
+    noteUrlTemplate,
+    noteDetailApiUrlTemplate,
     attachmentDirPath: expandHomePath(process.env.SAP_ATTACHMENT_DIR ?? DEFAULT_ATTACHMENT_DIR),
-    sessionProbeUrl: process.env.SAP_PROBE_URL ?? "https://me.sap.com/notes/2170696",
+    sessionProbeUrl,
     navigationTimeoutMs: intFromEnv("SAP_NAV_TIMEOUT_MS", 60_000),
     apiTimeoutMs: intFromEnv("SAP_API_TIMEOUT_MS", 60_000),
     networkIdleTimeoutMs: intFromEnv("SAP_NETWORK_IDLE_TIMEOUT_MS", 4_000),

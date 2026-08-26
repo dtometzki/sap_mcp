@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import { AddressInfo } from "node:net";
 import test from "node:test";
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type Page, type Route } from "playwright";
 import { loadConfig, type Config } from "./config.js";
 import { AutoLoginError, MfaRequiredError, fillLoginForm, waitForLoginResult } from "./autoLogin.js";
 
@@ -55,7 +55,9 @@ function startIdp(outcome: "portal" | "mfa" | "reject"): Promise<Server> {
 
     if (url.pathname === "/login") return response.end(USER_FORM);
     if (url.pathname === "/login/password") {
-      const target = outcome === "mfa" ? "/login/mfa" : "/notes/2170696";
+      // Successful sign-in lands on the portal host so waitForLoginResult sees
+      // a non-IdP URL — same split as the real accounts.sap.com → me.sap.com hop.
+      const target = outcome === "mfa" ? "/login/mfa" : "https://me.sap.com/notes/2170696";
       return response.end(passwordForm(target));
     }
     if (url.pathname === "/login/mfa") return response.end(MFA_FORM);
@@ -79,9 +81,29 @@ function testConfig(): Config {
   return { ...loadConfig(), loginStepTimeoutMs: 5_000 };
 }
 
+/**
+ * Serves the local IdP fixture under the real SAP hostnames so fillLoginForm's
+ * allowlist (https://*.sap.com) accepts the page — the same hosts the production
+ * auto-login types into after SAP_PROBE_URL redirects to accounts.sap.com.
+ */
+async function routeSapHostsToFixture(page: Page, origin: string): Promise<void> {
+  const handler = async (route: Route): Promise<void> => {
+    const incoming = new URL(route.request().url());
+    const mapped = `${origin}${incoming.pathname}${incoming.search}`;
+    const response = await fetch(mapped);
+    await route.fulfill({
+      status: response.status,
+      headers: { "content-type": response.headers.get("content-type") ?? "text/html" },
+      body: Buffer.from(await response.arrayBuffer()),
+    });
+  };
+  await page.route("https://accounts.sap.com/**", handler);
+  await page.route("https://me.sap.com/**", handler);
+}
+
 async function withIdp(
   outcome: "portal" | "mfa" | "reject",
-  fn: (browser: Browser, url: string) => Promise<void>,
+  fn: (browser: Browser, origin: string) => Promise<void>,
 ): Promise<void> {
   const server = await startIdp(outcome);
   const browser = await chromium.launch({ headless: true });
@@ -91,6 +113,13 @@ async function withIdp(
     await browser.close();
     await new Promise((resolve) => server.close(resolve));
   }
+}
+
+async function openSapLogin(browser: Browser, origin: string): Promise<Page> {
+  const tab = await (await browser.newContext()).newPage();
+  await routeSapHostsToFixture(tab, origin);
+  await tab.goto("https://accounts.sap.com/login");
+  return tab;
 }
 
 // Playwright's browser binary may be missing (fresh clone without `playwright install`);
@@ -107,13 +136,11 @@ test(
   "fillLoginForm completes the two-step form and waitForLoginResult confirms the portal",
   { skip: chromiumAvailable ? false : "Chromium not installed" },
   async () => {
-    await withIdp("portal", async (browser, url) => {
-      const context = await browser.newContext();
-      const tab = await context.newPage();
-      await tab.goto(`${url}/login`);
+    await withIdp("portal", async (browser, origin) => {
+      const tab = await openSapLogin(browser, origin);
       await fillLoginForm(tab, testConfig(), { username: USER, password: PASSWORD });
       await waitForLoginResult(tab, testConfig());
-      assert.match(tab.url(), /\/notes\/2170696/);
+      assert.match(tab.url(), /^https:\/\/me\.sap\.com\/notes\/2170696/);
     });
   },
 );
@@ -122,10 +149,8 @@ test(
   "an MFA prompt aborts the automatic login permanently",
   { skip: chromiumAvailable ? false : "Chromium not installed" },
   async () => {
-    await withIdp("mfa", async (browser, url) => {
-      const context = await browser.newContext();
-      const tab = await context.newPage();
-      await tab.goto(`${url}/login`);
+    await withIdp("mfa", async (browser, origin) => {
+      const tab = await openSapLogin(browser, origin);
       await fillLoginForm(tab, testConfig(), { username: USER, password: PASSWORD });
       const error = await waitForLoginResult(tab, testConfig()).catch((e: unknown) => e);
       assert.ok(error instanceof MfaRequiredError);
@@ -138,10 +163,8 @@ test(
   "rejected credentials surface the portal's message and are not retried",
   { skip: chromiumAvailable ? false : "Chromium not installed" },
   async () => {
-    await withIdp("reject", async (browser, url) => {
-      const context = await browser.newContext();
-      const tab = await context.newPage();
-      await tab.goto(`${url}/login`);
+    await withIdp("reject", async (browser, origin) => {
+      const tab = await openSapLogin(browser, origin);
       await fillLoginForm(tab, testConfig(), { username: USER, password: "wrong" });
       const error = await waitForLoginResult(tab, testConfig()).catch((e: unknown) => e);
       assert.ok(error instanceof AutoLoginError);
@@ -155,14 +178,29 @@ test(
   "a missing login form fails fast instead of hanging",
   { skip: chromiumAvailable ? false : "Chromium not installed" },
   async () => {
-    await withIdp("portal", async (browser, url) => {
-      const context = await browser.newContext();
-      const tab = await context.newPage();
-      await tab.goto(`${url}/notes/2170696`);
+    await withIdp("portal", async (browser, origin) => {
+      const tab = await (await browser.newContext()).newPage();
+      await routeSapHostsToFixture(tab, origin);
+      await tab.goto("https://me.sap.com/notes/2170696");
       const config = { ...testConfig(), loginStepTimeoutMs: 1_000 };
       await assert.rejects(
         fillLoginForm(tab, config, { username: USER, password: PASSWORD }),
         /No login form found/,
+      );
+    });
+  },
+);
+
+test(
+  "fillLoginForm refuses to type credentials on a non-SAP host",
+  { skip: chromiumAvailable ? false : "Chromium not installed" },
+  async () => {
+    await withIdp("portal", async (browser, origin) => {
+      const tab = await (await browser.newContext()).newPage();
+      await tab.goto(`${origin}/login`);
+      await assert.rejects(
+        fillLoginForm(tab, testConfig(), { username: USER, password: PASSWORD }),
+        /non-SAP host/,
       );
     });
   },

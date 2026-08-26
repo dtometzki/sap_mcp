@@ -10,8 +10,8 @@ import { fetchNote, resetTokenCache, searchNotes } from "./notes.js";
 import {
   downloadAttachment,
   fetchAttachmentList,
+  formatAttachmentList,
   type AttachmentDownload,
-  type NoteAttachment,
 } from "./attachments.js";
 import { ToolRunner } from "./toolRunner.js";
 
@@ -114,21 +114,6 @@ server.registerTool(
     ),
 );
 
-function formatAttachmentList(number: string, attachments: NoteAttachment[]): string {
-  if (attachments.length === 0) {
-    return (
-      `Note ${number} lists no attachments. If the note shows "A new version is in ` +
-      `preparation", the portal hides attachments until the new version is released ` +
-      `(see KBA 3453681).`
-    );
-  }
-  const lines = attachments.map((attachment) => {
-    const size = attachment.sizeBytes !== undefined ? ` (${attachment.sizeBytes} bytes)` : "";
-    return `${attachment.fileName}${size}\n${attachment.url}`;
-  });
-  return `Note ${number} has ${attachments.length} attachment(s):\n\n${lines.join("\n\n")}`;
-}
-
 function formatAttachmentDownload(download: AttachmentDownload): string {
   const type = download.contentType ? `, ${download.contentType}` : "";
   const header = `Saved: ${download.filePath} (${download.bytes} bytes${type})`;
@@ -144,7 +129,7 @@ server.registerTool(
   {
     title: "List SAP Note Attachments",
     description:
-      "List the file attachments of a SAP Note or KBA (file name, size, download URL). " +
+      "List the file attachments of a SAP Note or KBA (file name and size). " +
       "Use sap_note_attachment_get to download one. While a new note version is in " +
       "preparation, the portal may hide attachments (KBA 3453681).",
     inputSchema: {

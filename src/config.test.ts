@@ -91,6 +91,59 @@ test("within one origin the preferred spelling wins", () => {
   }
 });
 
+const URL_VARS = [
+  "SAP_SEARCH_URL",
+  "SAP_COVEO_TOKEN_URL",
+  "SAP_COVEO_SEARCH_URL",
+  "SAP_NOTE_URL",
+  "SAP_NOTE_API_URL",
+  "SAP_PROBE_URL",
+  "SAP_COVEO_ORG",
+];
+
+function clearUrlVars(): void {
+  for (const name of URL_VARS) delete process.env[name];
+}
+
+test("default portal URLs and a China identity-provider probe are accepted", () => {
+  try {
+    clearUrlVars();
+    const config = loadConfig();
+    assert.match(config.sessionProbeUrl, /^https:\/\/me\.sap\.com\//);
+    assert.match(config.coveoSearchUrl, /\.coveo\.com\//);
+    process.env.SAP_PROBE_URL = "https://accounts.sap.cn/saml2/idp/sso";
+    assert.equal(loadConfig().sessionProbeUrl, "https://accounts.sap.cn/saml2/idp/sso");
+  } finally {
+    clearUrlVars();
+  }
+});
+
+test("loadConfig rejects non-SAP portal URLs and a crafted Coveo org", () => {
+  try {
+    clearUrlVars();
+    process.env.SAP_PROBE_URL = "https://evil.example/login";
+    assert.throws(() => loadConfig(), /SAP_PROBE_URL must be an https URL/);
+    delete process.env.SAP_PROBE_URL;
+
+    process.env.SAP_NOTE_URL = "file:///etc/passwd";
+    assert.throws(() => loadConfig(), /SAP_NOTE_URL must be an https URL/);
+    delete process.env.SAP_NOTE_URL;
+
+    process.env.SAP_NOTE_URL = "http://me.sap.com/notes/{id}";
+    assert.throws(() => loadConfig(), /SAP_NOTE_URL must be an https URL/);
+    delete process.env.SAP_NOTE_URL;
+
+    process.env.SAP_COVEO_SEARCH_URL = "https://evil.example/search";
+    assert.throws(() => loadConfig(), /SAP_COVEO_SEARCH_URL must be an https URL/);
+    delete process.env.SAP_COVEO_SEARCH_URL;
+
+    process.env.SAP_COVEO_ORG = "evil.com/steal";
+    assert.throws(() => loadConfig(), /SAP_COVEO_ORG must contain only/);
+  } finally {
+    clearUrlVars();
+  }
+});
+
 test("auto-login stays off without a password, and SAP_AUTO_LOGIN=0 overrides it", () => {
   try {
     clearCredentialVars();

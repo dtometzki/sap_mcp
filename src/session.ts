@@ -8,6 +8,7 @@ import {
   type Page,
 } from "playwright";
 import type { Config } from "./config.js";
+import { assertAllowedPageUrl } from "./urls.js";
 
 export class SessionExpiredError extends Error {
   constructor() {
@@ -185,10 +186,12 @@ export class SapSession {
    */
   async open(url: string): Promise<Page> {
     if (!this.context) throw new Error("Session not started");
+    assertAllowedPageUrl(url, "navigation");
 
     const page = await this.context.newPage();
     try {
       const response = await page.goto(url, { waitUntil: "domcontentloaded" });
+      assertAllowedPageUrl(page.url(), "navigation");
       if (response?.status() === 401) {
         throw new SessionExpiredError();
       }

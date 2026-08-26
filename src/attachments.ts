@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, rename, rm } from "node:fs/promises";
+import { chmod, mkdir, open, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { buildUrl, type Config } from "./config.js";
+import { assertAllowedApiUrl, isAllowedApiUrl, isAllowedAttachmentHost } from "./urls.js";
 import {
   AccessDeniedError,
   SessionExpiredError,
@@ -37,21 +38,7 @@ export const INLINE_TEXT_LIMIT = 200_000;
 export const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
 const MAX_ATTACHMENT_REDIRECTS = 5;
 
-/**
- * Attachments may only be fetched from SAP-owned hosts. The download URL comes from
- * portal data we do not control, so this guards against a manipulated or rewritten
- * URL exfiltrating the session cookies to a foreign host.
- */
-export function isAllowedAttachmentHost(url: string): boolean {
-  try {
-    const { protocol, hostname } = new URL(url);
-    if (protocol !== "https:") return false;
-    const host = hostname.toLowerCase();
-    return host === "sap.com" || host.endsWith(".sap.com");
-  } catch {
-    return false;
-  }
-}
+export { isAllowedAttachmentHost };
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
@@ -106,6 +93,12 @@ export async function fetchAllowedAttachment(
   }
 }
 
+/** Creates `path` (and parents) and forces owner-only access, including on an existing dir. */
+export async function ensurePrivateDirectory(path: string): Promise<void> {
+  await mkdir(path, { recursive: true, mode: 0o700 });
+  await chmod(path, 0o700);
+}
+
 /** Streams a response to a temporary file and atomically installs it on success. */
 export async function writeResponseWithLimit(
   response: Response,
@@ -136,6 +129,8 @@ export async function writeResponseWithLimit(
     }
     await handle.close();
     await rename(temporary, filePath);
+    // rename() keeps the target's previous mode when it already existed.
+    await chmod(filePath, 0o600);
     return bytes;
   } catch (error) {
     await reader.cancel().catch(() => undefined);
@@ -227,6 +222,7 @@ export function extractAttachments(payload: unknown, baseUrl: string): NoteAttac
     } catch {
       return;
     }
+    if (!isAllowedAttachmentHost(url)) return;
     if (into.has(url)) return;
     const attachment: NoteAttachment = { fileName, url };
     const size = Number.parseInt(readField(node, SIZE_KEYS), 10);
@@ -260,10 +256,14 @@ async function fetchAttachmentsViaApi(
 ): Promise<NoteAttachment[]> {
   const url = buildUrl(config.noteDetailApiUrlTemplate, { id });
   return withRetry(async () => {
+    assertAllowedApiUrl(url, "Note detail request");
     const response = await session
       .request()
       .get(url, { headers: { accept: "application/json" }, timeout: config.apiTimeoutMs });
     try {
+      if (response.url() && !isAllowedApiUrl(response.url())) {
+        throw new Error(`Refusing note detail response from non-SAP host: ${response.url()}`);
+      }
       assertNotLoggedOut(response.status(), response.url(), `Note ${id}`, response.ok());
       if (!response.ok()) {
         throw new Error(`Note detail request failed: HTTP ${response.status()}`);
@@ -350,7 +350,9 @@ export async function fetchAttachmentList(
   id: string,
 ): Promise<NoteAttachment[]> {
   try {
-    return await fetchAttachmentsViaApi(session, config, id);
+    return (await fetchAttachmentsViaApi(session, config, id)).filter((attachment) =>
+      isAllowedAttachmentHost(attachment.url),
+    );
   } catch (error) {
     // Both are definite answers from a working portal; the DOM scrape only exists for
     // the case that the API moved, and would just repeat the same denial.
@@ -360,8 +362,26 @@ export async function fetchAttachmentList(
         error instanceof Error ? error.message : String(error)
       }`,
     );
-    return fetchAttachmentsViaDom(session, config, id);
+    return (await fetchAttachmentsViaDom(session, config, id)).filter((attachment) =>
+      isAllowedAttachmentHost(attachment.url),
+    );
   }
+}
+
+/** Client-facing list: names and sizes only — download URLs stay inside the process. */
+export function formatAttachmentList(number: string, attachments: NoteAttachment[]): string {
+  if (attachments.length === 0) {
+    return (
+      `Note ${number} lists no attachments. If the note shows "A new version is in ` +
+      `preparation", the portal hides attachments until the new version is released ` +
+      `(see KBA 3453681).`
+    );
+  }
+  const lines = attachments.map((attachment) => {
+    const size = attachment.sizeBytes !== undefined ? ` (${attachment.sizeBytes} bytes)` : "";
+    return `${attachment.fileName}${size}`;
+  });
+  return `Note ${number} has ${attachments.length} attachment(s):\n\n${lines.join("\n\n")}`;
 }
 
 function describeAvailable(attachments: NoteAttachment[]): string {
@@ -454,7 +474,7 @@ export async function downloadAttachment(
       }
 
       const directory = join(config.attachmentDirPath, id);
-      await mkdir(directory, { recursive: true });
+      await ensurePrivateDirectory(directory);
       const filePath = join(directory, sanitizeFileName(attachment.fileName));
       const bytes = await writeResponseWithLimit(response, filePath, MAX_DOWNLOAD_BYTES);
 

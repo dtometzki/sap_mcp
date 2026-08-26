@@ -113,7 +113,7 @@ Keine Credentials in der Config nötig — der Server nutzt ausschliesslich die 
 |---|---|---|
 | `sap_notes_search` | `query` (string), `limit` (1–25, default 10) | Note-Nummer, Titel, URL je Treffer |
 | `sap_note_get` | `number` (4–10 Ziffern) | Vollständiger Note-Inhalt als Markdown |
-| `sap_note_attachments` | `number` (4–10 Ziffern) | Datei-Anhänge der Note (Name, Größe, Download-URL) |
+| `sap_note_attachments` | `number` (4–10 Ziffern) | Datei-Anhänge der Note (Name, Größe; ohne Download-URL) |
 | `sap_note_attachment_get` | `number`, optional `fileName` | Lädt einen Anhang nach `SAP_ATTACHMENT_DIR` herunter; Text-Anhänge (.txt, .sql, .csv, …) zusätzlich inline |
 | `sap_session_status` | – | Ob die gespeicherte Session noch gültig ist |
 
@@ -123,7 +123,9 @@ leer, bis SAP die neue Version freigibt. `fileName` darf entfallen, wenn die Not
 einen Anhang hat; sonst genügt ein eindeutiger Teilstring (case-insensitive).
 Downloads sind auf 100 MB begrenzt; das Limit wird auch bei chunked Responses anhand
 der tatsächlich empfangenen Bytes durchgesetzt. Redirects werden nur zu HTTPS-Hosts
-unter `sap.com` verfolgt.
+unter `sap.com` verfolgt. Die Liste enthält absichtlich keine Download-URLs (die
+können signierte Token tragen). Dateien landen in einem Note-Unterordner mit
+Rechten `0700`, die Datei selbst mit `0600`.
 
 ## Konfiguration (ENV, alles optional)
 
@@ -137,8 +139,8 @@ unter `sap.com` verfolgt.
 | `SAP_COVEO_SEARCH_HUB` | `SAP for Me` | Coveo Search Hub / Pipeline-Kontext |
 | `SAP_NOTE_URL` | `https://me.sap.com/notes/{id}` | Detail-URL (`{id}`) |
 | `SAP_NOTE_API_URL` | `https://me.sap.com/backend/raw/sapnotes/Detail?q={id}&t=E&isVTEnabled=false` | JSON-API hinter der Note-Seite; Quelle der Anhangsliste (`{id}`) |
-| `SAP_ATTACHMENT_DIR` | `~/Downloads/sap-notes` | Zielordner für Anhänge (ein Unterordner je Note-Nummer, `~` wird expandiert) |
-| `SAP_PROBE_URL` | `https://me.sap.com/notes/2170696` | Seite zur Session-Prüfung |
+| `SAP_ATTACHMENT_DIR` | `~/Downloads/sap-notes` | Zielordner für Anhänge (ein Unterordner je Note-Nummer mit `0700`, `~` wird expandiert) |
+| `SAP_PROBE_URL` | `https://me.sap.com/notes/2170696` | Seite zur Session-Prüfung; muss `https://*.sap.com` oder `https://*.sap.cn` sein |
 | `SAP_NAV_TIMEOUT_MS` | `60000` | Navigations-Timeout |
 | `SAP_API_TIMEOUT_MS` | `60000` | Timeout für direkte HTTP-API-Aufrufe (Coveo-Token/-Suche, Note-Detail-API, Anhang-Download) |
 | `SAP_NETWORK_IDLE_TIMEOUT_MS` | `4000` | Kurze Wartezeit auf Netzwerk-Ruhe |
@@ -167,6 +169,10 @@ Der Server benutzt bewusst **keine** hartkodierten CSS-Klassen:
 
 Ändert SAP die Routen, genügt in der Regel ein Anpassen von `SAP_SEARCH_URL` / `SAP_NOTE_URL`
 (URL im Browser kopieren, Suchbegriff durch `{query}`, Nummer durch `{id}` ersetzen).
+Portal- und Login-URLs müssen HTTPS auf `*.sap.com` / `*.sap.cn` bleiben (die
+Coveo-Suche zusätzlich `*.coveo.com`). Andere Werte — `http:`, `file:`, fremde
+Hosts — lehnt der Server beim Start ab. Der Auto-Login tippt Benutzer und Passwort
+nur auf einer erlaubten SAP-Seite; nach einem Redirect weg von SAP bricht er ab.
 
 ## Grenzen
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -18,9 +18,11 @@ import {
   looksLikeLoginPage,
 } from "./session.js";
 import {
+  ensurePrivateDirectory,
   extractAttachments,
   fetchAllowedAttachment,
   fileNameFromHref,
+  formatAttachmentList,
   isAllowedAttachmentHost,
   isTextAttachment,
   sanitizeFileName,
@@ -295,6 +297,30 @@ test("extractAttachments prefers Attachments subtrees over incidental matches", 
   assert.deepEqual(attachments, [{ fileName: "real.txt", url: "https://me.sap.com/dl/real" }]);
 });
 
+test("extractAttachments drops non-SAP download URLs", () => {
+  const attachments = extractAttachments(
+    {
+      Attachments: {
+        Items: [
+          { Filename: "safe.txt", URL: "https://me.sap.com/dl/safe" },
+          { Filename: "steal.txt", URL: "https://evil.example/dl/steal" },
+        ],
+      },
+    },
+    DETAIL_API_BASE,
+  );
+  assert.deepEqual(attachments, [{ fileName: "safe.txt", url: "https://me.sap.com/dl/safe" }]);
+});
+
+test("formatAttachmentList omits download URLs", () => {
+  const text = formatAttachmentList("3696257", [
+    { fileName: "safe.txt", url: "https://me.sap.com/dl/safe", sizeBytes: 12 },
+  ]);
+  assert.match(text, /safe\.txt \(12 bytes\)/);
+  assert.doesNotMatch(text, /https:\/\//);
+  assert.doesNotMatch(text, /me\.sap\.com/);
+});
+
 test("extractAttachments returns [] for payloads without attachments", () => {
   assert.deepEqual(extractAttachments({ Response: { SAPNote: {} } }, DETAIL_API_BASE), []);
   assert.deepEqual(extractAttachments(null, DETAIL_API_BASE), []);
@@ -308,6 +334,8 @@ test("isAllowedAttachmentHost only allows https on sap.com hosts", () => {
   assert.equal(isAllowedAttachmentHost("https://evil.example.com/sap.com"), false);
   assert.equal(isAllowedAttachmentHost("https://notsap.com/x"), false);
   assert.equal(isAllowedAttachmentHost("http://me.sap.com/x"), false);
+  assert.equal(isAllowedAttachmentHost("https://sap.com.evil.example/x"), false);
+  assert.equal(isAllowedAttachmentHost("https://evil@me.sap.com/x"), false);
   assert.equal(isAllowedAttachmentHost("not a url"), false);
 });
 
@@ -384,8 +412,20 @@ test("writeResponseWithLimit atomically saves a response within the limit", asyn
     const response = new Response("safe content");
     assert.equal(await writeResponseWithLimit(response, target, 100), 12);
     assert.equal(await readFile(target, "utf8"), "safe content");
+    assert.equal((await stat(target)).mode & 0o777, 0o600);
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("ensurePrivateDirectory creates an owner-only directory", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "sap-notes-dir-"));
+  const nested = join(parent, "3696257");
+  try {
+    await ensurePrivateDirectory(nested);
+    assert.equal((await stat(nested)).mode & 0o777, 0o700);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
   }
 });
 
