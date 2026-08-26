@@ -7,6 +7,28 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.5.3] – 2026-08-26
+
+### Behoben
+- Coveo-Suche: Lehnt Coveo den gecachten Such-Token mit HTTP 401/403 ab (z. B. nach einem
+  Re-Login oder bei vorzeitig ungültigem Token), wird der Token-Cache verworfen und die
+  Suche einmal mit frischem Token wiederholt. Bisher fiel die Suche sofort auf den
+  DOM-Scrape zurück und alle weiteren Aufrufe scheiterten bis zum Ablauf des Token-TTL
+  mit demselben toten Token.
+- Auto-Login: Nur noch die eigentliche Logon-Fehlermeldung des Identity Providers
+  (`#logonMessageText`) markiert einen Login als endgültig abgelehnt. Generische Banner
+  (`[role='alert']`, `.sapMMessageStrip`, …) — Cookie-Hinweise, Wartungsmeldungen,
+  „Passwort läuft bald ab" — brechen den Login nicht mehr ab und schalten den
+  automatischen Login nicht mehr für die gesamte Prozesslaufzeit ab; ihr Text wird
+  stattdessen in die Timeout-Meldung aufgenommen.
+- `.env`-Parser: Ein Inline-Kommentar nach einem Wert in Anführungszeichen
+  (`SAPPASSWORD="ab#cd" # Kommentar`) wird jetzt wie bei dotenv erkannt. Bisher blieben
+  die Anführungszeichen Teil des Werts.
+
+### Geändert
+- Neue Offline-Tests für die Token-Erneuerung der Coveo-Suche (`coveoSearch.test.ts`),
+  den Kommentar-Fall des `.env`-Parsers und die Banner-Fälle des Auto-Logins.
+
 ## [1.5.2] – 2026-08-26
 
 ### Sicherheit

@@ -31,10 +31,11 @@ const USER_FORM = page(
    </form>`,
 );
 
-function passwordForm(target: string, error = ""): string {
+function passwordForm(target: string, error = "", notice = ""): string {
   return page(
     "Password",
     `${error === "" ? "" : `<div id="logonMessageText">${error}</div>`}
+     ${notice === "" ? "" : `<div role="alert">${notice}</div>`}
      <form method="GET" action="${target}" novalidate>
        <input id="j_password" name="j_password" type="password" />
        <button id="logOnFormSubmit" type="submit">Sign in</button>
@@ -48,7 +49,9 @@ const MFA_FORM = page(
 );
 
 /** `outcome` decides what a correct password leads to: the portal, or an MFA prompt. */
-function startIdp(outcome: "portal" | "mfa" | "reject"): Promise<Server> {
+type Outcome = "portal" | "mfa" | "reject" | "banner" | "banner-stuck";
+
+function startIdp(outcome: Outcome): Promise<Server> {
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
     response.writeHead(200, { "content-type": "text/html" });
@@ -58,13 +61,19 @@ function startIdp(outcome: "portal" | "mfa" | "reject"): Promise<Server> {
       // Successful sign-in lands on the portal host so waitForLoginResult sees
       // a non-IdP URL — same split as the real accounts.sap.com → me.sap.com hop.
       const target = outcome === "mfa" ? "/login/mfa" : "https://me.sap.com/notes/2170696";
-      return response.end(passwordForm(target));
+      // Generic banners (cookie hint, maintenance notice) sit next to a working form.
+      const notice = outcome.startsWith("banner") ? "We use cookies on this site." : "";
+      return response.end(passwordForm(target, "", notice));
     }
     if (url.pathname === "/login/mfa") return response.end(MFA_FORM);
     if (url.pathname === "/notes/2170696") {
       // A wrong password sends the user back to the form with the IdP's error banner.
       if (outcome === "reject" || url.searchParams.get("j_password") !== PASSWORD) {
         return response.end(passwordForm("/notes/2170696", "Wrong credentials"));
+      }
+      // The IdP stays on the form with only a generic message: no verdict, just stuck.
+      if (outcome === "banner-stuck") {
+        return response.end(passwordForm("/notes/2170696", "", "Service temporarily unavailable"));
       }
       return response.end(page("SAP Note", "<main>SAP Note 2170696</main>"));
     }
@@ -102,7 +111,7 @@ async function routeSapHostsToFixture(page: Page, origin: string): Promise<void>
 }
 
 async function withIdp(
-  outcome: "portal" | "mfa" | "reject",
+  outcome: Outcome,
   fn: (browser: Browser, origin: string) => Promise<void>,
 ): Promise<void> {
   const server = await startIdp(outcome);
@@ -202,6 +211,36 @@ test(
         fillLoginForm(tab, testConfig(), { username: USER, password: PASSWORD }),
         /non-SAP host/,
       );
+    });
+  },
+);
+
+test(
+  "a generic banner next to the form does not abort a login that succeeds",
+  { skip: chromiumAvailable ? false : "Chromium not installed" },
+  async () => {
+    await withIdp("banner", async (browser, origin) => {
+      const tab = await openSapLogin(browser, origin);
+      await fillLoginForm(tab, testConfig(), { username: USER, password: PASSWORD });
+      await waitForLoginResult(tab, testConfig());
+      assert.match(tab.url(), /^https:\/\/me\.sap\.com\/notes\/2170696/);
+    });
+  },
+);
+
+test(
+  "a stuck login with only a generic banner is reported but not marked permanent",
+  { skip: chromiumAvailable ? false : "Chromium not installed" },
+  async () => {
+    await withIdp("banner-stuck", async (browser, origin) => {
+      const tab = await openSapLogin(browser, origin);
+      const config = { ...testConfig(), loginStepTimeoutMs: 2_000 };
+      await fillLoginForm(tab, config, { username: USER, password: PASSWORD });
+      const error = await waitForLoginResult(tab, config).catch((e: unknown) => e);
+      assert.ok(error instanceof AutoLoginError);
+      assert.match(error.message, /did not complete/);
+      assert.match(error.message, /Service temporarily unavailable/);
+      assert.equal(error.permanent, false);
     });
   },
 );

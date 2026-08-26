@@ -256,52 +256,80 @@ async function fetchCoveoToken(session: SapSession, config: Config): Promise<str
 const COVEO_PAGE_SIZE = 50;
 const MAX_COVEO_PAGES = 3;
 
+/**
+ * Coveo rejected the search token (HTTP 401/403). The token is cached for TOKEN_TTL_MS,
+ * but Coveo may invalidate it earlier (SAP re-login, shortened lifetime); without a
+ * dedicated error the search would fall through to the DOM scrape while every following
+ * call keeps reusing the same dead token until the cache expires.
+ */
+export class CoveoTokenRejectedError extends Error {
+  constructor(status: number) {
+    super(`Coveo rejected the search token: HTTP ${status}`);
+    this.name = "CoveoTokenRejectedError";
+  }
+}
+
+async function postCoveoSearch(
+  session: SapSession,
+  config: Config,
+  token: string,
+  query: string,
+  firstResult: number,
+): Promise<CoveoResponse> {
+  assertAllowedApiUrl(config.coveoSearchUrl, "Coveo search request");
+  const response = await session.request().post(config.coveoSearchUrl, {
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    timeout: config.apiTimeoutMs,
+    data: {
+      locale: "en-US",
+      q: query,
+      searchHub: config.coveoSearchHub,
+      tab: "All",
+      sortCriteria: "relevancy",
+      // Over-fetch and paginate because Coveo also returns blogs and documentation.
+      numberOfResults: COVEO_PAGE_SIZE,
+      firstResult,
+      fieldsToInclude: ["mh_id", "source", "mh_alt_url", "objecttype", "documenttype", "language"],
+    },
+  });
+
+  try {
+    if (response.url() && !isAllowedApiUrl(response.url())) {
+      throw new Error(`Refusing Coveo search response from non-SAP host: ${response.url()}`);
+    }
+    const status = response.status();
+    if (status === 401 || status === 403) throw new CoveoTokenRejectedError(status);
+    if (!response.ok()) throw new Error(`Coveo search failed: HTTP ${status}`);
+    return parseCoveoResponse(await response.json());
+  } finally {
+    await response.dispose().catch(() => undefined);
+  }
+}
+
 async function searchNotesViaCoveo(
   session: SapSession,
   config: Config,
   query: string,
   limit: number,
 ): Promise<NoteHit[]> {
-  const token = await withRetry(() => fetchCoveoToken(session, config));
+  let token = await withRetry(() => fetchCoveoToken(session, config));
+  let tokenRenewed = false;
   const hits = new Map<string, NoteHit>();
 
   for (let pageIndex = 0; pageIndex < MAX_COVEO_PAGES && hits.size < limit; pageIndex += 1) {
     const firstResult = pageIndex * COVEO_PAGE_SIZE;
-    const body = await withRetry(async () => {
-      assertAllowedApiUrl(config.coveoSearchUrl, "Coveo search request");
-      const response = await session.request().post(config.coveoSearchUrl, {
-        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-        timeout: config.apiTimeoutMs,
-        data: {
-          locale: "en-US",
-          q: query,
-          searchHub: config.coveoSearchHub,
-          tab: "All",
-          sortCriteria: "relevancy",
-          // Over-fetch and paginate because Coveo also returns blogs and documentation.
-          numberOfResults: COVEO_PAGE_SIZE,
-          firstResult,
-          fieldsToInclude: [
-            "mh_id",
-            "source",
-            "mh_alt_url",
-            "objecttype",
-            "documenttype",
-            "language",
-          ],
-        },
-      });
-
-      try {
-        if (response.url() && !isAllowedApiUrl(response.url())) {
-          throw new Error(`Refusing Coveo search response from non-SAP host: ${response.url()}`);
-        }
-        if (!response.ok()) throw new Error(`Coveo search failed: HTTP ${response.status()}`);
-        return parseCoveoResponse(await response.json());
-      } finally {
-        await response.dispose().catch(() => undefined);
-      }
-    });
+    let body: CoveoResponse;
+    try {
+      body = await withRetry(() => postCoveoSearch(session, config, token, query, firstResult));
+    } catch (error) {
+      // A rejected token is fetched fresh exactly once per search; a second rejection
+      // means the session (not the token) is the problem and is reported as-is.
+      if (!(error instanceof CoveoTokenRejectedError) || tokenRenewed) throw error;
+      tokenRenewed = true;
+      resetTokenCache();
+      token = await withRetry(() => fetchCoveoToken(session, config));
+      body = await withRetry(() => postCoveoSearch(session, config, token, query, firstResult));
+    }
 
     for (const result of body.results) {
       const hit = mapCoveoResult(result, config.noteUrlTemplate);

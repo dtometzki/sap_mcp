@@ -100,9 +100,12 @@ export function parseDotEnv(content: string): Record<string, string> {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
 
     let value = withoutExport.slice(separator + 1).trim();
-    const quote = value[0];
-    if ((quote === '"' || quote === "'") && value.length >= 2 && value.endsWith(quote)) {
-      value = value.slice(1, -1);
+    // A quoted value may be followed by an inline comment: KEY="x" # note. The lazy
+    // group stops at the first closing quote that leaves only whitespace/comment behind.
+    const quoted = /^(["'])(.*?)\1\s*(?:#.*)?$/.exec(value);
+    if (quoted) {
+      const quote = quoted[1];
+      value = quoted[2] ?? "";
       // Only double quotes interpret escapes; single quotes stay literal (as in dotenv).
       if (quote === '"') {
         value = value.replace(/\\n/g, "\n").replace(/\\r/g, "\r").replace(/\\"/g, '"');

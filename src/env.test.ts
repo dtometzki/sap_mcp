@@ -37,6 +37,16 @@ test("parseDotEnv strips inline comments only from unquoted values", () => {
   assert.equal(parsed.C, "pass#word");
 });
 
+test("parseDotEnv allows an inline comment after a quoted value", () => {
+  const parsed = parseDotEnv(
+    ['A="ab#cd" # comment', "B='x y'   # note", 'C="a\\"b" # escaped quote', 'D="a" # "b"'].join("\n"),
+  );
+  assert.equal(parsed.A, "ab#cd");
+  assert.equal(parsed.B, "x y");
+  assert.equal(parsed.C, 'a"b');
+  assert.equal(parsed.D, "a");
+});
+
 test("parseDotEnv skips malformed lines instead of throwing", () => {
   const parsed = parseDotEnv("NOT_AN_ASSIGNMENT\n=novalue\n1BAD=x\nGOOD=y\n");
   assert.deepEqual(parsed, { GOOD: "y" });

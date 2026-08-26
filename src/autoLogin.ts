@@ -47,9 +47,18 @@ export function credentialsFromConfig(config: Config): Credentials | undefined {
   return { username: config.username, password: config.password };
 }
 
-/** Error/message banners the identity provider renders for bad credentials or a locked user. */
-const LOGIN_ERROR_SELECTOR = [
-  "#logonMessageText",
+/**
+ * The identity provider's own logon message: rendered only for a rejected password or a
+ * locked user, so its text is a definitive answer and retrying is pointless (permanent).
+ */
+const LOGIN_REJECTION_SELECTOR = "#logonMessageText";
+
+/**
+ * Generic banners. They also carry cookie hints, maintenance notices and "password
+ * expires soon" warnings, so their text must never abort a login on its own — it is only
+ * reported when the login has not completed, and never disables the automatic login.
+ */
+const LOGIN_MESSAGE_SELECTOR = [
   ".sapMMessageStrip",
   "[role='alert']",
   ".messageError",
@@ -156,24 +165,30 @@ export async function waitForLoginResult(page: Page, config: Config): Promise<vo
     const passwordVisible = await isVisible(page, config.loginPasswordSelector);
     if (!onLoginPage && !passwordVisible) return;
 
-    const message = await page
-      .locator(LOGIN_ERROR_SELECTOR)
-      .first()
-      .innerText({ timeout: 1_000 })
-      .catch(() => "");
-    const text = message.trim();
-    if (text !== "") {
-      throw new AutoLoginError(`The SAP identity provider rejected the login: ${text}`, true);
+    const rejection = await bannerText(page, LOGIN_REJECTION_SELECTOR);
+    if (rejection !== "") {
+      throw new AutoLoginError(`The SAP identity provider rejected the login: ${rejection}`, true);
     }
 
     await page.waitForTimeout(POLL_INTERVAL_MS);
   }
 
   if (await isVisible(page, config.loginMfaSelector)) throw new MfaRequiredError();
+  const notice = await bannerText(page, LOGIN_MESSAGE_SELECTOR);
   throw new AutoLoginError(
     "The login did not complete within SAP_LOGIN_STEP_TIMEOUT_MS. Run `npm run login` to " +
-      "see what the portal is showing.",
+      "see what the portal is showing." +
+      (notice === "" ? "" : ` The page shows: ${notice}`),
   );
+}
+
+async function bannerText(page: Page, selector: string): Promise<string> {
+  const text = await page
+    .locator(selector)
+    .first()
+    .innerText({ timeout: 1_000 })
+    .catch(() => "");
+  return text.trim();
 }
 
 /**
