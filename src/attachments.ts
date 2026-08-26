@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, open, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { buildUrl, type Config } from "./config.js";
+import { assertAllowedApiUrl, isAllowedApiUrl, isAllowedAttachmentHost } from "./urls.js";
 import {
   assertAllowedApiUrl,
   isAllowedApiUrl,
