@@ -2,6 +2,7 @@ import TurndownService from "turndown";
 import type { Page } from "playwright";
 import { z } from "zod";
 import { buildUrl, type Config } from "./config.js";
+import { assertAllowedApiUrl, isAllowedApiUrl } from "./urls.js";
 import {
   AccessDeniedError,
   SessionExpiredError,
@@ -195,6 +196,7 @@ export function resetTokenCache(): void {
 async function fetchCoveoToken(session: SapSession, config: Config): Promise<string> {
   if (cachedToken && Date.now() < cachedToken.expiresAt) return cachedToken.value;
 
+  assertAllowedApiUrl(config.coveoTokenUrl, "Coveo token request");
   const response = await session
     .request()
     .get(config.coveoTokenUrl, {
@@ -203,6 +205,9 @@ async function fetchCoveoToken(session: SapSession, config: Config): Promise<str
     });
 
   try {
+    if (response.url() && !isAllowedApiUrl(response.url())) {
+      throw new Error(`Refusing Coveo token response from non-SAP host: ${response.url()}`);
+    }
     if (!response.ok()) {
       cachedToken = undefined;
       assertNotLoggedOut(response.status(), response.url(), "Coveo token endpoint", response.ok());
@@ -245,6 +250,7 @@ async function searchNotesViaCoveo(
   for (let pageIndex = 0; pageIndex < MAX_COVEO_PAGES && hits.size < limit; pageIndex += 1) {
     const firstResult = pageIndex * COVEO_PAGE_SIZE;
     const body = await withRetry(async () => {
+      assertAllowedApiUrl(config.coveoSearchUrl, "Coveo search request");
       const response = await session.request().post(config.coveoSearchUrl, {
         headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
         timeout: config.apiTimeoutMs,
@@ -269,6 +275,9 @@ async function searchNotesViaCoveo(
       });
 
       try {
+        if (response.url() && !isAllowedApiUrl(response.url())) {
+          throw new Error(`Refusing Coveo search response from non-SAP host: ${response.url()}`);
+        }
         if (!response.ok()) throw new Error(`Coveo search failed: HTTP ${response.status()}`);
         return parseCoveoResponse(await response.json());
       } finally {

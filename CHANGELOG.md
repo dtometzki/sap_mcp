@@ -7,6 +7,8 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.5.2] – 2026-08-26
+
 ### Sicherheit
 - Das S-User-Passwort wird nach dem Einlesen der Konfiguration wieder aus `process.env`
   entfernt (`scrubPasswordFromEnv`), bevor Playwright den Chromium-Prozess startet.
@@ -15,6 +17,17 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 - Transitive Abhängigkeiten aktualisiert (`npm audit fix`): `ip-address` (2× high, SSRF /
   Trust-Boundary-Bypass, GHSA-mwp4-54f8-5fhr u. a.) und `hono` (moderate). `npm audit --omit=dev`
   meldet 0 Schwachstellen.
+- Portal-, Login- und API-URLs werden gegen eine HTTPS-Allowlist geprüft
+  (`*.sap.com` / `*.sap.cn`, Coveo-Suche zusätzlich `*.coveo.com`). `file:`, `http:`
+  und fremde Hosts werden beim Start und vor jeder Navigation bzw. jedem API-Call
+  abgelehnt — verhindert SSRF und das Öffnen lokaler Dateien über `SAP_NOTE_URL`.
+- Auto-Login und `npm run login` tippen Benutzer/Passwort nur, wenn die aktuelle
+  Seite (nach Redirects) auf der Allowlist liegt. Ein umgeleiteter `SAP_PROBE_URL`
+  kann die Credentials nicht mehr auf einer Phishing-Seite landen.
+- `sap_note_attachments` gibt keine Download-URLs mehr an den Client; fremde Hosts
+  in der Note-Detail-API werden verworfen.
+- Anhang-Unterordner werden auf `0700` gesetzt, gespeicherte Dateien nach dem
+  atomaren Rename auf `0600`.
 
 ## [1.5.1] – 2026-08-25
 

@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import type { Config } from "./config.js";
 import { SapSession, looksLikeLoginPage } from "./session.js";
+import { isAllowedLoginUrl } from "./urls.js";
 
 /**
  * Non-interactive login with the credentials from .env (SAPUSER / SAPPASSWORD).
@@ -69,6 +70,22 @@ async function isVisible(page: Page, selector: string): Promise<boolean> {
  * Submits the current step: clicks the submit button when there is one, otherwise
  * presses Enter (some IdP variants render a link or an auto-submitting field).
  */
+/**
+ * Called immediately before every credential keystroke. The probe URL is already
+ * allow-listed at config load, but page.goto follows redirects — a foreign final
+ * URL must never receive the S-user password.
+ */
+function assertTrustedLoginPage(page: Page): void {
+  const url = page.url();
+  if (isAllowedLoginUrl(url)) return;
+  throw new AutoLoginError(
+    `Refusing to enter credentials on a non-SAP host (${url}). ` +
+      `Automatic login only types the S-user password on https://*.sap.com / https://*.sap.cn. ` +
+      `Check SAP_PROBE_URL.`,
+    true,
+  );
+}
+
 async function submitStep(page: Page, config: Config): Promise<void> {
   const submit = page.locator(config.loginSubmitSelector).first();
   if (await submit.isVisible().catch(() => false)) {
@@ -101,6 +118,7 @@ export async function fillLoginForm(
           "may have changed; adjust the selector in .env or run `npm run login`.",
       );
     });
+  assertTrustedLoginPage(page);
   await user.fill(credentials.username);
 
   // Only advance a step when the password field is not on this page already.
@@ -115,6 +133,7 @@ export async function fillLoginForm(
         "`npm run login` to see what the portal is asking for.",
     );
   });
+  assertTrustedLoginPage(page);
   await password.fill(credentials.password);
   await submitStep(page, config);
 }
@@ -172,6 +191,7 @@ export async function performAutoLogin(
     await session.start({ allowMissingState: true, ignoreStoredState: true });
     const page = await session.newPage();
     await page.goto(config.sessionProbeUrl, { waitUntil: "domcontentloaded" });
+    // fillLoginForm re-checks the (possibly redirected) URL before each keystroke.
     await fillLoginForm(page, config, credentials);
     await waitForLoginResult(page, config);
 

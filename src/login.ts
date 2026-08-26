@@ -9,6 +9,7 @@ import {
   waitForLoginResult,
   MfaRequiredError,
 } from "./autoLogin.js";
+import { isAllowedLoginUrl } from "./urls.js";
 
 /**
  * Interactive login. Run once per machine (and again whenever the session expires).
@@ -32,6 +33,12 @@ async function main(): Promise<void> {
     await session.start({ allowMissingState: true, ignoreStoredState: true });
     const page = await session.newPage();
     await page.goto(config.sessionProbeUrl, { waitUntil: "domcontentloaded" });
+    if (!isAllowedLoginUrl(page.url())) {
+      throw new Error(
+        `The browser left the SAP domain (${page.url()}). Aborting so credentials are not ` +
+          `typed on a foreign page. Check SAP_PROBE_URL.`,
+      );
+    }
 
     let needsManualStep = true;
     if (credentials) {
