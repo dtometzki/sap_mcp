@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyEnv, envFileCandidates, envKeysFromFile, parseDotEnv, resetEnvKeysFromFile } from "./env.js";
+import {
+  applyEnv,
+  envFileCandidates,
+  envKeysFromFile,
+  parseDotEnv,
+  resetEnvKeysFromFile,
+  scrubPasswordFromEnv,
+} from "./env.js";
 
 test("parseDotEnv reads plain assignments and ignores comments and blank lines", () => {
   const parsed = parseDotEnv("# comment\n\nSAPUSER=S0001234567\n  SAPPASSWORD = secret \n");
@@ -77,5 +84,30 @@ test("applyEnv records which keys came from the file", () => {
   } finally {
     resetEnvKeysFromFile();
     delete process.env[key];
+  }
+});
+
+test("scrubPasswordFromEnv removes the password from process.env and the file-origin set", () => {
+  const previous = { SAPPASSWORD: process.env.SAPPASSWORD, SAP_PASSWORD: process.env.SAP_PASSWORD };
+  try {
+    resetEnvKeysFromFile();
+    delete process.env.SAPPASSWORD;
+    delete process.env.SAP_PASSWORD;
+    applyEnv({ SAPPASSWORD: "file-secret" });
+    process.env.SAP_PASSWORD = "shell-secret";
+
+    assert.deepEqual(scrubPasswordFromEnv(), ["SAPPASSWORD", "SAP_PASSWORD"]);
+    // Neither spelling may survive: a child process (Chromium) must not inherit it.
+    assert.equal(process.env.SAPPASSWORD, undefined);
+    assert.equal(process.env.SAP_PASSWORD, undefined);
+    assert.equal(envKeysFromFile().has("SAPPASSWORD"), false);
+    // Idempotent: a second call finds nothing to remove.
+    assert.deepEqual(scrubPasswordFromEnv(), []);
+  } finally {
+    resetEnvKeysFromFile();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 });

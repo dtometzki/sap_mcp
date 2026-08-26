@@ -24,6 +24,28 @@ export function envKeysFromFile(): ReadonlySet<string> {
   return fileProvidedKeys;
 }
 
+/** Variable names that may carry the S-user password (preferred spelling first). */
+export const PASSWORD_ENV_KEYS = ["SAPPASSWORD", "SAP_PASSWORD"] as const;
+
+/**
+ * Removes the password from process.env once loadConfig() has copied it.
+ *
+ * process.env is inherited by every child process — including the Chromium that
+ * Playwright launches — and ends up in crash dumps and diagnostic reports. The
+ * password is only ever needed as a value inside the Config object, so it must not
+ * stay in the environment for the lifetime of the server. Returns the removed keys.
+ */
+export function scrubPasswordFromEnv(): string[] {
+  const removed: string[] = [];
+  for (const key of PASSWORD_ENV_KEYS) {
+    if (process.env[key] === undefined) continue;
+    delete process.env[key];
+    fileProvidedKeys.delete(key);
+    removed.push(key);
+  }
+  return removed;
+}
+
 /** Test helper: forget which keys came from a file. */
 export function resetEnvKeysFromFile(): void {
   fileProvidedKeys = new Set<string>();

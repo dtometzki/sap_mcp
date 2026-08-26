@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { loadDotEnv } from "./env.js";
+import { loadDotEnv, scrubPasswordFromEnv } from "./env.js";
 import { loadConfig } from "./config.js";
 import { SapSession } from "./session.js";
 import { credentialsFromConfig, performAutoLogin } from "./autoLogin.js";
@@ -25,6 +25,9 @@ const MAX_RESULTS = 25;
 loadDotEnv();
 
 const config = loadConfig();
+// The password now lives in `config` only: keep it out of the environment that the
+// headless Chromium (and any other child process) would otherwise inherit.
+scrubPasswordFromEnv();
 const session = new SapSession(config, true);
 const credentials = config.autoLoginEnabled ? credentialsFromConfig(config) : undefined;
 

@@ -2,7 +2,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { loadConfig } from "./config.js";
 import { SapSession } from "./session.js";
-import { envKeysFromFile, loadDotEnv } from "./env.js";
+import { envKeysFromFile, loadDotEnv, scrubPasswordFromEnv } from "./env.js";
 import {
   credentialsFromConfig,
   fillLoginForm,
@@ -22,6 +22,9 @@ async function main(): Promise<void> {
   const envFile = loadDotEnv();
   const config = loadConfig();
   const credentials = credentialsFromConfig(config);
+  // Name the actual source, so a stale .env is not blamed for a shell export (or vice versa).
+  const fromFile = envKeysFromFile().has("SAPPASSWORD") || envKeysFromFile().has("SAP_PASSWORD");
+  scrubPasswordFromEnv(); // before the visible browser is launched
   const session = new SapSession(config, false);
   const rl = createInterface({ input: stdin, output: stdout });
 
@@ -32,8 +35,6 @@ async function main(): Promise<void> {
 
     let needsManualStep = true;
     if (credentials) {
-      // Name the actual source, so a stale .env is not blamed for a shell export (or vice versa).
-      const fromFile = envKeysFromFile().has("SAPPASSWORD") || envKeysFromFile().has("SAP_PASSWORD");
       const source = fromFile && envFile !== undefined ? envFile : "the process environment";
       console.log(`Signing in as ${credentials.username} with the credentials from ${source}...`);
       try {

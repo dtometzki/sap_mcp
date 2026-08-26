@@ -7,6 +7,15 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Sicherheit
+- Das S-User-Passwort wird nach dem Einlesen der Konfiguration wieder aus `process.env`
+  entfernt (`scrubPasswordFromEnv`), bevor Playwright den Chromium-Prozess startet.
+  Bisher erbte der Browser-Kindprozess das Passwort in seiner Umgebung (sichtbar z. B.
+  in Crash-Reports oder `ps eww`). Gilt für Server, `npm run login` und die Diagnose-Skripte.
+- Transitive Abhängigkeiten aktualisiert (`npm audit fix`): `ip-address` (2× high, SSRF /
+  Trust-Boundary-Bypass, GHSA-mwp4-54f8-5fhr u. a.) und `hono` (moderate). `npm audit --omit=dev`
+  meldet 0 Schwachstellen.
+
 ## [1.5.1] – 2026-08-25
 
 ### Geändert
