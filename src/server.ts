@@ -2,11 +2,11 @@ import { createRequire } from "node:module";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { loadDotEnv, scrubPasswordFromEnv } from "./env.js";
+import { loadDotEnv, scrubCredentialsFromEnv } from "./env.js";
 import { loadConfig } from "./config.js";
 import { SapSession } from "./session.js";
 import { credentialsFromConfig, performAutoLogin } from "./autoLogin.js";
-import { fetchNote, resetTokenCache, searchNotes } from "./notes.js";
+import { fetchNote, resetTokenCache, searchNotes, wrapUntrustedPortalContent } from "./notes.js";
 import {
   downloadAttachment,
   fetchAttachmentList,
@@ -27,7 +27,7 @@ loadDotEnv();
 const config = loadConfig();
 // The password now lives in `config` only: keep it out of the environment that the
 // headless Chromium (and any other child process) would otherwise inherit.
-scrubPasswordFromEnv();
+scrubCredentialsFromEnv();
 const session = new SapSession(config, true);
 const credentials = config.autoLoginEnabled ? credentialsFromConfig(config) : undefined;
 
@@ -80,7 +80,12 @@ server.registerTool(
       "Full-text search for SAP Notes and Knowledge Base Articles in the authenticated SAP " +
       "support portal. Returns note numbers, titles and URLs. Use sap_note_get for the content.",
     inputSchema: {
-      query: z.string().trim().min(2).describe("Search terms, e.g. 'HANA backup failed error 447'"),
+      query: z
+        .string()
+        .trim()
+        .min(2)
+        .max(500)
+        .describe("Search terms, e.g. 'HANA backup failed error 447'"),
       limit: z.number().int().min(1).max(MAX_RESULTS).default(10),
     },
   },
@@ -110,7 +115,11 @@ server.registerTool(
   async ({ number }) =>
     runner.execute(
       () => fetchNote(session, config, number),
-      (note) => `# ${note.id} — ${note.title}\n\nSource: ${note.url}\n\n${note.markdown}`,
+      (note) =>
+        wrapUntrustedPortalContent(
+          `SAP Note ${note.id}`,
+          `# ${note.id} — ${note.title}\n\nSource: ${note.url}\n\n${note.markdown}`,
+        ),
     ),
 );
 
@@ -121,7 +130,7 @@ function formatAttachmentDownload(download: AttachmentDownload): string {
   const truncated = download.textTruncated
     ? `\n\n[Output truncated — the complete file is on disk at ${download.filePath}]`
     : "";
-  return `${header}\n\n--- ${download.attachment.fileName} ---\n${download.text}${truncated}`;
+  return `${header}\n\n${wrapUntrustedPortalContent(`attachment ${download.attachment.fileName}`, download.text)}${truncated}`;
 }
 
 server.registerTool(
@@ -157,6 +166,7 @@ server.registerTool(
         .string()
         .trim()
         .min(1)
+        .max(200)
         .optional()
         .describe(
           "File name as listed by sap_note_attachments (case-insensitive, substring is " +

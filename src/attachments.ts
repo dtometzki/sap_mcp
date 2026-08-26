@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, open, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { buildUrl, type Config } from "./config.js";
-import { assertAllowedApiUrl, isAllowedApiUrl, isAllowedAttachmentHost } from "./urls.js";
+import {
+  assertAllowedApiUrl,
+  isAllowedApiUrl,
+  isAllowedAttachmentHost,
+  isTrustedAttachmentCookieHost,
+} from "./urls.js";
 import {
   AccessDeniedError,
   SessionExpiredError,
@@ -29,7 +34,7 @@ export interface AttachmentDownload {
 }
 
 /** Cap for inline text returned to the MCP client; the full file is always on disk. */
-export const INLINE_TEXT_LIMIT = 200_000;
+export const INLINE_TEXT_LIMIT = 50_000;
 
 /**
  * Hard limit for downloaded bytes. Content-Length is checked before reading, and the
@@ -170,12 +175,14 @@ export function sanitizeFileName(name: string): string {
 }
 
 const TEXT_EXTENSION_PATTERN =
-  /\.(txt|sql|csv|tsv|log|md|json|xml|html?|abap|cfg|conf|ini|properties|sh|py|ya?ml)$/i;
+  /\.(txt|sql|csv|tsv|log|md|json|xml|abap|cfg|conf|ini|properties|sh|py|ya?ml)$/i;
+const INLINE_BLOCKED = /html|javascript|ecmascript/i;
 
 /** Whether the content is worth returning inline instead of only saving to disk. */
 export function isTextAttachment(fileName: string, contentType: string): boolean {
+  if (INLINE_BLOCKED.test(contentType) || /\.(html?|js)$/i.test(fileName)) return false;
   if (/^text\//i.test(contentType)) return true;
-  if (/json|xml|csv|javascript/i.test(contentType)) return true;
+  if (/json|xml|csv/i.test(contentType)) return true;
   return TEXT_EXTENSION_PATTERN.test(fileName);
 }
 
@@ -441,7 +448,10 @@ export async function downloadAttachment(
     try {
       response = await fetchAllowedAttachment(
         attachment.url,
-        (url) => session.cookieHeader(url),
+        (url) =>
+          isTrustedAttachmentCookieHost(url, config.attachmentCookieHosts)
+            ? session.cookieHeader(url)
+            : Promise.resolve(""),
         signal,
       );
     } catch (error) {

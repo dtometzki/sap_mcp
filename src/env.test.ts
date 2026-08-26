@@ -4,10 +4,15 @@ import {
   applyEnv,
   envFileCandidates,
   envKeysFromFile,
+  inspectEnvFile,
   parseDotEnv,
   resetEnvKeysFromFile,
+  scrubCredentialsFromEnv,
   scrubPasswordFromEnv,
 } from "./env.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 test("parseDotEnv reads plain assignments and ignores comments and blank lines", () => {
   const parsed = parseDotEnv("# comment\n\nSAPUSER=S0001234567\n  SAPPASSWORD = secret \n");
@@ -109,5 +114,41 @@ test("scrubPasswordFromEnv removes the password from process.env and the file-or
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+  }
+});
+
+test("scrubCredentialsFromEnv also removes the S-user id", () => {
+  const previous = {
+    SAPUSER: process.env.SAPUSER,
+    SAP_USERNAME: process.env.SAP_USERNAME,
+    SAPPASSWORD: process.env.SAPPASSWORD,
+  };
+  try {
+    resetEnvKeysFromFile();
+    process.env.SAPUSER = "S0001234567";
+    process.env.SAPPASSWORD = "secret";
+    delete process.env.SAP_USERNAME;
+    const removed = scrubCredentialsFromEnv();
+    assert.ok(removed.includes("SAPPASSWORD"));
+    assert.ok(removed.includes("SAPUSER"));
+    assert.equal(process.env.SAPUSER, undefined);
+    assert.equal(process.env.SAPPASSWORD, undefined);
+  } finally {
+    resetEnvKeysFromFile();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("inspectEnvFile accepts regular files and rejects directories", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sap-notes-env-"));
+  try {
+    assert.equal(inspectEnvFile(directory), "not-file");
+    assert.equal(inspectEnvFile(join(directory, "missing.env")), "missing");
+    assert.equal(inspectEnvFile(new URL(import.meta.url).pathname), "ok");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 });

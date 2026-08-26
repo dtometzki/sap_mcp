@@ -28,6 +28,19 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
   in der Note-Detail-API werden verworfen.
 - Anhang-Unterordner werden auf `0700` gesetzt, gespeicherte Dateien nach dem
   atomaren Rename auf `0600`.
+- Session-Cookies beim Anhang-Download gehen nur noch an `me.sap.com`,
+  `*.support.sap.com` und `accounts.sap.com` (erweiterbar über
+  `SAP_ATTACHMENT_COOKIE_HOSTS`). Andere `*.sap.com`-Hosts bleiben downloadbar,
+  aber ohne Cookie-Jar.
+- Note-Inhalt und Inline-Anhänge werden als untrusted Portal-Daten geklammert;
+  HTML/JavaScript-Anhänge werden nicht mehr inline zurückgegeben.
+  `INLINE_TEXT_LIMIT` ist 50 000 Zeichen (Datei bleibt vollständig auf Disk).
+- Such-`query` ist auf 500 Zeichen begrenzt, `fileName` auf 200.
+- Playwright startet mit `acceptDownloads: false` (Downloads laufen über fetch).
+- `.env`-Loader lädt nur reguläre Dateien (Verzeichnisse/Devices werden
+  übersprungen); Symlinks werden mit Warnung aufgelöst.
+- S-User-Id wird zusammen mit dem Passwort aus `process.env` entfernt.
+  Diagnose-Mitschnitte redigieren Query-Strings in URLs.
 
 ## [1.5.1] – 2026-08-25
 
