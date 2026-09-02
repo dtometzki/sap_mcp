@@ -15,7 +15,7 @@ import {
   looksLikeLoginPage,
   type SapSession,
 } from "./session.js";
-import { coerceField, withRetry } from "./notes.js";
+import { coerceField, errorMessage, withRetry } from "./notes.js";
 
 export interface NoteAttachment {
   fileName: string;
@@ -104,11 +104,61 @@ export async function ensurePrivateDirectory(path: string): Promise<void> {
   await chmod(path, 0o700);
 }
 
-/** Streams a response to a temporary file and atomically installs it on success. */
+/**
+ * Abort signal that fires after `timeoutMs` WITHOUT PROGRESS, not after a fixed total
+ * budget. A total budget (AbortSignal.timeout) cuts off a 100 MB attachment on a slow
+ * link although data keeps flowing; a stalled connection is still detected because
+ * nothing calls touch() while it hangs.
+ */
+export interface DownloadWatchdog {
+  signal: AbortSignal;
+  /** Re-arms the timer; call whenever a chunk arrives. */
+  touch(): void;
+  /** Stops the timer once the download has finished or failed. */
+  clear(): void;
+}
+
+export function inactivityWatchdog(timeoutMs: number): DownloadWatchdog {
+  const controller = new AbortController();
+  let timer: NodeJS.Timeout | undefined;
+  const arm = (): void => {
+    if (timer) clearTimeout(timer);
+    // Deliberately not unref'd: a stalled read has nothing else keeping the loop alive,
+    // and the timer is the only thing that can turn the stall into an error.
+    timer = setTimeout(() => controller.abort(), timeoutMs);
+  };
+  arm();
+  return {
+    signal: controller.signal,
+    touch: arm,
+    clear: () => {
+      if (timer) clearTimeout(timer);
+    },
+  };
+}
+
+/** Rejects when the signal aborts; never rejects unobserved (the catch marks it handled). */
+function abortPromise(signal: AbortSignal): Promise<never> {
+  const promise = new Promise<never>((_resolve, reject) => {
+    const fail = (): void => reject(new Error("Download aborted", { cause: signal.reason }));
+    if (signal.aborted) fail();
+    else signal.addEventListener("abort", fail, { once: true });
+  });
+  promise.catch(() => undefined);
+  return promise;
+}
+
+/**
+ * Streams a response to a temporary file and atomically installs it on success.
+ * With a watchdog, every chunk re-arms its inactivity timer and a stalled read is
+ * abandoned when it fires (fetch bodies reject on abort by themselves; the race also
+ * covers streams that are not tied to the signal).
+ */
 export async function writeResponseWithLimit(
   response: Response,
   filePath: string,
   maxBytes: number,
+  watchdog?: DownloadWatchdog,
 ): Promise<number> {
   const declaredLength = Number(response.headers.get("content-length"));
   if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
@@ -120,11 +170,15 @@ export async function writeResponseWithLimit(
   const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   const handle = await open(temporary, "wx", 0o600);
   const reader = response.body.getReader();
+  const aborted = watchdog ? abortPromise(watchdog.signal) : undefined;
   let bytes = 0;
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value } = aborted
+        ? await Promise.race([reader.read(), aborted])
+        : await reader.read();
       if (done) break;
+      watchdog?.touch();
       bytes += value.byteLength;
       if (bytes > maxBytes) {
         await reader.cancel().catch(() => undefined);
@@ -364,14 +418,30 @@ export async function fetchAttachmentList(
     // Both are definite answers from a working portal; the DOM scrape only exists for
     // the case that the API moved, and would just repeat the same denial.
     if (error instanceof SessionExpiredError || error instanceof AccessDeniedError) throw error;
-    console.error(
-      `Note detail API failed, falling back to DOM scrape: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-    return (await fetchAttachmentsViaDom(session, config, id)).filter((attachment) =>
-      isAllowedAttachmentHost(attachment.url),
-    );
+    console.error(`Note detail API failed, falling back to DOM scrape: ${errorMessage(error)}`);
+    let attachments: NoteAttachment[];
+    try {
+      attachments = await fetchAttachmentsViaDom(session, config, id);
+    } catch (fallbackError) {
+      if (fallbackError instanceof SessionExpiredError || fallbackError instanceof AccessDeniedError) {
+        throw fallbackError;
+      }
+      throw new Error(
+        `Attachment list for note ${id} failed: ${errorMessage(error)} ` +
+          `(DOM fallback: ${errorMessage(fallbackError)})`,
+        { cause: error },
+      );
+    }
+    // Same reasoning as searchNotes: an empty scrape after a failed API call is a broken
+    // backend, not a note without attachments — do not report it as "no attachments".
+    if (attachments.length === 0) {
+      throw new Error(
+        `Attachment list for note ${id} failed: ${errorMessage(error)} ` +
+          `(the DOM fallback found nothing either)`,
+        { cause: error },
+      );
+    }
+    return attachments.filter((attachment) => isAllowedAttachmentHost(attachment.url));
   }
 }
 
@@ -443,65 +513,80 @@ export async function downloadAttachment(
   }
 
   return withRetry(async () => {
-    const signal = AbortSignal.timeout(config.apiTimeoutMs);
-    let response: Response;
+    // apiTimeoutMs bounds the time between two chunks, not the whole transfer.
+    const watchdog = inactivityWatchdog(config.apiTimeoutMs);
     try {
-      response = await fetchAllowedAttachment(
-        attachment.url,
-        (url) =>
-          isTrustedAttachmentCookieHost(url, config.attachmentCookieHosts)
-            ? session.cookieHeader(url)
-            : Promise.resolve(""),
-        signal,
-      );
+      return await transferAttachment(session, config, id, attachment, watchdog);
     } catch (error) {
-      if (signal.aborted) {
-        throw new Error(`Attachment download ETIMEDOUT after ${config.apiTimeoutMs} ms.`, {
-          cause: error,
-        });
-      }
-      throw error;
-    }
-
-    try {
-      assertNotLoggedOut(
-        response.status,
-        response.url,
-        `"${attachment.fileName}"`,
-        response.ok,
-      );
-      if (!response.ok) {
-        throw new Error(`Attachment download failed: HTTP ${response.status}`);
-      }
-      const contentType = response.headers.get("content-type") ?? "";
-
-      // A login or error page served instead of the file must not end up on disk.
-      if (/text\/html/i.test(contentType) && !/\.html?$/i.test(attachment.fileName)) {
+      if (watchdog.signal.aborted) {
+        // "ETIMEDOUT" keeps the error transient for withRetry.
         throw new Error(
-          `Portal returned an HTML page instead of "${attachment.fileName}" — the session ` +
-            `may lack permission for this download, or the attachment URL scheme changed.`,
+          `Attachment download ETIMEDOUT: no data received for ${config.apiTimeoutMs} ms.`,
+          { cause: error },
         );
       }
-
-      const directory = join(config.attachmentDirPath, id);
-      await ensurePrivateDirectory(directory);
-      const filePath = join(directory, sanitizeFileName(attachment.fileName));
-      const bytes = await writeResponseWithLimit(response, filePath, MAX_DOWNLOAD_BYTES);
-
-      const result: AttachmentDownload = {
-        attachment,
-        filePath,
-        bytes,
-        contentType,
-      };
-      if (isTextAttachment(attachment.fileName, contentType)) {
-        const inline = await readInlineText(filePath, bytes);
-        result.text = inline.text;
-        result.textTruncated = inline.truncated;
-      }
-      return result;
+      throw error;
     } finally {
-      await response.body?.cancel().catch(() => undefined);
+      watchdog.clear();
     }
   });
+}
+
+async function transferAttachment(
+  session: SapSession,
+  config: Config,
+  id: string,
+  attachment: NoteAttachment,
+  watchdog: DownloadWatchdog,
+): Promise<AttachmentDownload> {
+  const response = await fetchAllowedAttachment(
+    attachment.url,
+    (url) =>
+      isTrustedAttachmentCookieHost(url, config.attachmentCookieHosts)
+        ? session.cookieHeader(url)
+        : Promise.resolve(""),
+    watchdog.signal,
+  );
+  watchdog.touch();
+
+  try {
+    assertNotLoggedOut(
+      response.status,
+      response.url,
+      `"${attachment.fileName}"`,
+      response.ok,
+    );
+    if (!response.ok) {
+      throw new Error(`Attachment download failed: HTTP ${response.status}`);
+    }
+    const contentType = response.headers.get("content-type") ?? "";
+
+    // A login or error page served instead of the file must not end up on disk.
+    if (/text\/html/i.test(contentType) && !/\.html?$/i.test(attachment.fileName)) {
+      throw new Error(
+        `Portal returned an HTML page instead of "${attachment.fileName}" — the session ` +
+          `may lack permission for this download, or the attachment URL scheme changed.`,
+      );
+    }
+
+    const directory = join(config.attachmentDirPath, id);
+    await ensurePrivateDirectory(directory);
+    const filePath = join(directory, sanitizeFileName(attachment.fileName));
+    const bytes = await writeResponseWithLimit(response, filePath, MAX_DOWNLOAD_BYTES, watchdog);
+
+    const result: AttachmentDownload = {
+      attachment,
+      filePath,
+      bytes,
+      contentType,
+    };
+    if (isTextAttachment(attachment.fileName, contentType)) {
+      const inline = await readInlineText(filePath, bytes);
+      result.text = inline.text;
+      result.textTruncated = inline.truncated;
+    }
+    return result;
+  } finally {
+    await response.body?.cancel().catch(() => undefined);
+  }
 }

@@ -8,6 +8,7 @@ import {
   searchNotes,
   searchNotesViaDom,
 } from "./notes.js";
+import type { NoteHit } from "./notes.js";
 import type { SapSession } from "./session.js";
 
 /**
@@ -36,9 +37,12 @@ function noteResult(id: string) {
   return { title: `${id} - Note ${id}`, raw: { mh_id: id, source: "SAP-Note" } };
 }
 
-/** `tokens` are handed out per token request, `searches` per search POST (in order). */
-function fakeSession(tokens: string[], searches: Scripted[]) {
-  const calls = { token: 0, search: 0, bearers: [] as string[] };
+/**
+ * `tokens` are handed out per token request, `searches` per search POST (in order).
+ * `domHits` scripts the DOM fallback: undefined = it must not run at all.
+ */
+function fakeSession(tokens: string[], searches: Scripted[], domHits?: NoteHit[]) {
+  const calls = { token: 0, search: 0, bearers: [] as string[], dom: 0 };
   const config = loadConfig();
   const session = {
     request: () => ({
@@ -54,7 +58,14 @@ function fakeSession(tokens: string[], searches: Scripted[]) {
         return Promise.resolve(fakeResponse(config.coveoSearchUrl, scripted));
       },
     }),
-    withOpenPage: () => Promise.reject(new Error("DOM fallback must not run")),
+    withOpenPage: (_url: string, fn: (page: unknown) => Promise<NoteHit[]>) => {
+      calls.dom += 1;
+      if (!domHits) return Promise.reject(new Error("DOM fallback must not run"));
+      return fn({
+        $$eval: () =>
+          Promise.resolve(domHits.map((hit) => ({ href: hit.url, text: `${hit.id} - ${hit.title}` }))),
+      });
+    },
   } as unknown as SapSession;
   return { session, config, calls };
 }
@@ -83,9 +94,13 @@ test("a second token rejection is reported instead of retried forever", async ()
       { status: 403, body: {} },
     ],
   );
-  // searchNotes would fall back to the DOM scrape (stubbed to fail loudly); the
-  // fallback's error must carry the rejection, and no third token may be requested.
-  await assert.rejects(searchNotes(session, config, "hana", 10), /DOM fallback must not run/);
+  // searchNotes falls back to the DOM scrape (stubbed to fail loudly); the reported
+  // error must carry BOTH the rejection and the fallback failure, and no third token
+  // may be requested.
+  await assert.rejects(
+    searchNotes(session, config, "hana", 10),
+    /HTTP 403.*DOM fallback must not run/,
+  );
   assert.equal(calls.token, 2);
   assert.equal(calls.search, 2);
 });
@@ -99,4 +114,30 @@ test("CoveoTokenRejectedError carries the status and is not transient", () => {
 
 test("searchNotesViaDom stays reachable as the documented fallback", () => {
   assert.equal(typeof searchNotesViaDom, "function");
+});
+
+test("an empty DOM fallback after a Coveo failure is reported as an error, not as no hits", async () => {
+  resetTokenCache();
+  const { session, config, calls } = fakeSession(["t"], [{ status: 500, body: {} }], []);
+  await assert.rejects(
+    searchNotes(session, config, "hana", 10),
+    /Search failed: .*HTTP 500.*found nothing either/,
+  );
+  assert.equal(calls.dom, 1);
+});
+
+test("a DOM fallback with hits still answers when Coveo is down", async () => {
+  resetTokenCache();
+  const { session, config } = fakeSession(["t"], [{ status: 500, body: {} }], [
+    { id: "1234567", title: "Fallback note", url: "https://me.sap.com/notes/1234567" },
+  ]);
+  const hits = await searchNotes(session, config, "hana", 10);
+  assert.deepEqual(hits, [
+    { id: "1234567", title: "Fallback note", url: "https://me.sap.com/notes/1234567" },
+  ]);
+});
+
+test("HTTP 429 counts as transient, other 4xx do not", () => {
+  assert.equal(isTransientError(new Error("Coveo search failed: HTTP 429")), true);
+  assert.equal(isTransientError(new Error("Coveo search failed: HTTP 404")), false);
 });

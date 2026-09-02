@@ -214,7 +214,7 @@ export function loadConfig(): Config {
   assertConfigUrl("SAP_PROBE_URL", sessionProbeUrl, {}, isAllowedPageUrl, pageHint);
 
   return {
-    storageStatePath: process.env.SAP_STATE_PATH ?? DEFAULT_STATE_PATH,
+    storageStatePath: expandHomePath(process.env.SAP_STATE_PATH ?? DEFAULT_STATE_PATH),
     searchUrlTemplate,
     coveoTokenUrl,
     coveoSearchUrl,

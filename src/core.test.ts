@@ -3,7 +3,7 @@ import { access, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { buildUrl } from "./config.js";
+import { buildUrl, loadConfig } from "./config.js";
 import {
   coerceField,
   extractNoteId,
@@ -17,13 +17,16 @@ import {
   SessionExpiredError,
   assertNotLoggedOut,
   looksLikeLoginPage,
+  type SapSession,
 } from "./session.js";
 import {
   ensurePrivateDirectory,
   extractAttachments,
   fetchAllowedAttachment,
+  fetchAttachmentList,
   fileNameFromHref,
   formatAttachmentList,
+  inactivityWatchdog,
   isAllowedAttachmentHost,
   isTextAttachment,
   sanitizeFileName,
@@ -417,6 +420,103 @@ test("writeResponseWithLimit atomically saves a response within the limit", asyn
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("writeResponseWithLimit aborts a stalled stream once the watchdog fires", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sap-notes-stall-"));
+  const target = join(directory, "attachment.bin");
+  const watchdog = inactivityWatchdog(50);
+  try {
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+          // never closes: simulates a connection that hangs after the first chunk
+        },
+      }),
+    );
+    await assert.rejects(
+      writeResponseWithLimit(response, target, 100, watchdog),
+      /Download aborted/,
+    );
+    assert.equal(watchdog.signal.aborted, true);
+    await assert.rejects(access(target));
+  } finally {
+    watchdog.clear();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("the watchdog measures inactivity, not total transfer time", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sap-notes-slow-"));
+  const target = join(directory, "attachment.bin");
+  const watchdog = inactivityWatchdog(80);
+  try {
+    let sent = 0;
+    const response = new Response(
+      new ReadableStream({
+        pull(controller) {
+          // 6 chunks x 30 ms = 180 ms total, comfortably above the 80 ms watchdog.
+          return new Promise<void>((resolve) =>
+            setTimeout(() => {
+              if (sent === 6) controller.close();
+              else controller.enqueue(new Uint8Array([sent]));
+              sent += 1;
+              resolve();
+            }, 30),
+          );
+        },
+      }),
+    );
+    assert.equal(await writeResponseWithLimit(response, target, 100, watchdog), 6);
+    assert.equal(watchdog.signal.aborted, false);
+  } finally {
+    watchdog.clear();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+/** Note-detail API scripted to fail; the DOM scrape returns the given anchors. */
+function fakeAttachmentSession(anchors: { href: string; text: string }[]) {
+  const session = {
+    request: () => ({
+      get: () =>
+        Promise.resolve({
+          url: () => "https://me.sap.com/backend/raw/sapnotes/Detail",
+          status: () => 500,
+          ok: () => false,
+          headers: () => ({ "content-type": "application/json" }),
+          json: () => Promise.resolve({}),
+          dispose: () => Promise.resolve(),
+        }),
+    }),
+    withOpenPage: (_url: string, fn: (page: unknown) => Promise<unknown>) =>
+      fn({ $$eval: () => Promise.resolve(anchors) }),
+  } as unknown as SapSession;
+  return session;
+}
+
+test("fetchAttachmentList reports the API error when the DOM fallback is empty", async () => {
+  const config = loadConfig();
+  await assert.rejects(
+    fetchAttachmentList(fakeAttachmentSession([]), config, "1234567"),
+    /Attachment list for note 1234567 failed: .*HTTP 500.*found nothing either/,
+  );
+});
+
+test("fetchAttachmentList still answers from the DOM fallback when it finds files", async () => {
+  const config = loadConfig();
+  const attachments = await fetchAttachmentList(
+    fakeAttachmentSession([
+      { href: "https://me.sap.com/attachments/1234567/fix.sql", text: "fix.sql" },
+      { href: "https://me.sap.com/notes/1234567", text: "Some note title" },
+    ]),
+    config,
+    "1234567",
+  );
+  assert.deepEqual(attachments, [
+    { fileName: "fix.sql", url: "https://me.sap.com/attachments/1234567/fix.sql" },
+  ]);
 });
 
 test("ensurePrivateDirectory creates an owner-only directory", async () => {

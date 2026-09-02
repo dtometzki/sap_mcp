@@ -7,6 +7,27 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.6.0] – 2026-09-02
+
+### Behoben
+- Suche und Anhangsliste: Schlägt der Primärpfad (Coveo bzw. Note-Detail-API) fehl und
+  liefert auch der DOM-Fallback nichts, wird jetzt der ursprüngliche Fehler gemeldet.
+  Bisher kam in diesem Fall ein irreführendes „No notes found“ / „lists no attachments“
+  zurück, sodass ein defektes Backend wie eine leere Trefferliste aussah.
+- `SAP_STATE_PATH`: Ein führendes `~` wird jetzt wie bei `SAP_ATTACHMENT_DIR` expandiert
+  statt als Verzeichnisname `~` im Arbeitsverzeichnis des MCP-Clients zu landen.
+- Anhang-Download: `SAP_API_TIMEOUT_MS` begrenzt die Wartezeit zwischen zwei Datenblöcken
+  statt die Gesamtdauer. Große Anhänge auf langsamen Leitungen brachen bisher nach
+  60 s ab, obwohl Daten flossen; ein hängender Transfer wird weiterhin erkannt.
+- HTTP 429 (Coveo-Rate-Limit) gilt jetzt als transient und wird wie 5xx einmal wiederholt.
+
+### Geändert
+- `sap_notes_search` und `sap_note_attachments` markieren ihre Ausgabe (Titel bzw.
+  Dateinamen aus dem Portal) wie `sap_note_get` als nicht vertrauenswürdigen Portalinhalt.
+- README: Hinweise zu Proxys (Playwright-Client vs. Node-`fetch`) und zum Fehlerverhalten
+  der Fallbacks; `.env.example` zeigt `SAP_STATE_PATH` mit `~`.
+- Neue Offline-Tests für die Fallback-Fehler, das Inaktivitäts-Timeout, `~`-Expansion und 429.
+
 ## [1.5.3] – 2026-08-26
 
 ### Behoben

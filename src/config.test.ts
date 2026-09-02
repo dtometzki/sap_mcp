@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { join } from "node:path";
 import test from "node:test";
 import { boolFromEnv, hostListFromEnv, intFromEnv, loadConfig } from "./config.js";
 import { applyEnv, resetEnvKeysFromFile } from "./env.js";
@@ -173,5 +174,18 @@ test("auto-login stays off without a password, and SAP_AUTO_LOGIN=0 overrides it
     assert.throws(() => boolFromEnv("SAP_AUTO_LOGIN", true), /must be one of/);
   } finally {
     clearCredentialVars();
+  }
+});
+
+test("SAP_STATE_PATH expands a leading ~ like SAP_ATTACHMENT_DIR does", () => {
+  const previous = process.env.SAP_STATE_PATH;
+  try {
+    process.env.SAP_STATE_PATH = "~/.sap-notes-mcp/other.json";
+    const { storageStatePath } = loadConfig();
+    assert.equal(storageStatePath.includes("~"), false);
+    assert.ok(storageStatePath.endsWith(join(".sap-notes-mcp", "other.json")));
+  } finally {
+    if (previous === undefined) delete process.env.SAP_STATE_PATH;
+    else process.env.SAP_STATE_PATH = previous;
   }
 });

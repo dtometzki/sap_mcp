@@ -95,7 +95,11 @@ server.registerTool(
       (hits) =>
         hits.length === 0
           ? `No notes found for: ${query}`
-          : hits.map((hit) => `${hit.id} — ${hit.title}\n${hit.url}`).join("\n\n"),
+          : // Titles come from the portal too — same trust boundary as the note body.
+            wrapUntrustedPortalContent(
+              "search results",
+              hits.map((hit) => `${hit.id} — ${hit.title}\n${hit.url}`).join("\n\n"),
+            ),
     ),
 );
 
@@ -148,7 +152,14 @@ server.registerTool(
   async ({ number }) =>
     runner.execute(
       () => fetchAttachmentList(session, config, number),
-      (attachments) => formatAttachmentList(number, attachments),
+      (attachments) =>
+        attachments.length === 0
+          ? formatAttachmentList(number, attachments)
+          : // File names are portal-supplied strings, not something the client should act on.
+            wrapUntrustedPortalContent(
+              "attachment list",
+              formatAttachmentList(number, attachments),
+            ),
     ),
 );
 

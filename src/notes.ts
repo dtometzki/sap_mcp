@@ -15,7 +15,8 @@ import {
 export function isTransientError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   const httpStatus = /HTTP (\d{3})/.exec(error.message)?.[1];
-  if (httpStatus) return Number(httpStatus) >= 500;
+  // 429 is Coveo's rate limit: transient by definition, unlike the other 4xx codes.
+  if (httpStatus) return Number(httpStatus) >= 500 || httpStatus === "429";
   return /net::ERR_|ECONNRESET|ECONNREFUSED|ETIMEDOUT|socket hang up|fetch failed/i.test(
     error.message,
   );
@@ -32,6 +33,10 @@ export async function withRetry<T>(fn: () => Promise<T>, retries = 1, delayMs = 
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
+}
+
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export interface NoteHit {
@@ -123,10 +128,29 @@ export async function searchNotes(
     if (error instanceof SessionExpiredError || error instanceof AccessDeniedError) throw error;
     // Coveo (org id / token endpoint) may have changed; try the legacy scrape before giving up.
     // Log the original error to stderr (safe for stdio MCP) so it is not silently lost.
-    console.error(
-      `Coveo search failed, falling back to DOM scrape: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    return await searchNotesViaDom(session, config, query, limit);
+    console.error(`Coveo search failed, falling back to DOM scrape: ${errorMessage(error)}`);
+    let hits: NoteHit[];
+    try {
+      hits = await searchNotesViaDom(session, config, query, limit);
+    } catch (fallbackError) {
+      if (fallbackError instanceof SessionExpiredError || fallbackError instanceof AccessDeniedError) {
+        throw fallbackError;
+      }
+      throw new Error(
+        `Search failed: ${errorMessage(error)} (DOM fallback: ${errorMessage(fallbackError)})`,
+        { cause: error },
+      );
+    }
+    // An empty fallback is not evidence of "no results": the scrape only exists for the
+    // case that Coveo moved, and reporting [] here would turn a broken backend into a
+    // confident "No notes found" answer.
+    if (hits.length === 0) {
+      throw new Error(
+        `Search failed: ${errorMessage(error)} (the DOM fallback found nothing either)`,
+        { cause: error },
+      );
+    }
+    return hits;
   }
 }
 

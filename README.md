@@ -125,13 +125,27 @@ Downloads sind auf 100 MB begrenzt; das Limit wird auch bei chunked Responses an
 der tatsächlich empfangenen Bytes durchgesetzt. Redirects werden nur zu HTTPS-Hosts
 unter `sap.com` verfolgt. Die Liste enthält absichtlich keine Download-URLs (die
 können signierte Token tragen). Dateien landen in einem Note-Unterordner mit
-Rechten `0700`, die Datei selbst mit `0600`.
+Rechten `0700`, die Datei selbst mit `0600`. `SAP_API_TIMEOUT_MS` begrenzt beim Download
+die Wartezeit zwischen zwei Datenblöcken, nicht die Gesamtdauer — große Anhänge auf
+langsamen Leitungen laufen durch, ein hängender Transfer bricht trotzdem ab.
+
+Hinweis zu Proxys: Coveo-Token/-Suche und die Note-Detail-API laufen über den
+HTTP-Client des Playwright-Browsers, der Anhang-Download über Nodes eingebautes `fetch`
+(undici). Hinter einem Corporate-Proxy kann daher das eine funktionieren und das andere
+nicht: Für den Browser gilt die Proxy-Konfiguration des Systems bzw. Playwrights, `fetch`
+beachtet `HTTPS_PROXY` nur, wenn Node mit `NODE_USE_ENV_PROXY=1` (Node ≥ 24) gestartet
+wird. Bei einem hängenden Download also zuerst prüfen, ob der Proxy für `fetch` gesetzt ist.
+
+Schlägt die Coveo-Suche bzw. die Note-Detail-API fehl und liefert auch der DOM-Fallback
+nichts, melden `sap_notes_search` und `sap_note_attachments` den ursprünglichen Fehler
+statt „keine Treffer“ / „keine Anhänge“ — eine leere Antwort ist damit immer eine echte
+Antwort des Portals.
 
 ## Konfiguration (ENV, alles optional)
 
 | Variable | Default | Zweck |
 |---|---|---|
-| `SAP_STATE_PATH` | `~/.sap-notes-mcp/session.json` | Ablage der Session |
+| `SAP_STATE_PATH` | `~/.sap-notes-mcp/session.json` | Ablage der Session (`~` wird expandiert) |
 | `SAP_SEARCH_URL` | `https://me.sap.com/search?q={query}&tab=notes` | Such-URL (`{query}`) |
 | `SAP_COVEO_ORG` | `sapamericaproductiontyfzmfz0` | Coveo-Organisation |
 | `SAP_COVEO_TOKEN_URL` | SAP-for-Me-Token-Endpunkt | Endpunkt für kurzlebige Such-Token |
@@ -143,7 +157,7 @@ Rechten `0700`, die Datei selbst mit `0600`.
 | `SAP_ATTACHMENT_COOKIE_HOSTS` | – | Zusätzliche Hosts, die beim Anhang-Download Session-Cookies erhalten dürfen (kommagetrennt; Default: `me.sap.com`, `*.support.sap.com`, `accounts.sap.com`) |
 | `SAP_PROBE_URL` | `https://me.sap.com/notes/2170696` | Seite zur Session-Prüfung; muss `https://*.sap.com` oder `https://*.sap.cn` sein |
 | `SAP_NAV_TIMEOUT_MS` | `60000` | Navigations-Timeout |
-| `SAP_API_TIMEOUT_MS` | `60000` | Timeout für direkte HTTP-API-Aufrufe (Coveo-Token/-Suche, Note-Detail-API, Anhang-Download) |
+| `SAP_API_TIMEOUT_MS` | `60000` | Timeout für direkte HTTP-API-Aufrufe (Coveo-Token/-Suche, Note-Detail-API); beim Anhang-Download maximale Wartezeit zwischen zwei Datenblöcken |
 | `SAP_NETWORK_IDLE_TIMEOUT_MS` | `4000` | Kurze Wartezeit auf Netzwerk-Ruhe |
 | `SAP_RENDER_SETTLE_MS` | `2500` | Wartezeit für spätes SPA-Rendering |
 | `SAP_IDLE_TIMEOUT_MS` | `600000` | Browser nach Inaktivität schließen (0 = deaktiviert) |
