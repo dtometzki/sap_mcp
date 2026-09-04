@@ -28,3 +28,6 @@ einen Pull Request nach `main` bereitgestellt:
 6. **Pull Request erstellen** – einen PR von der Arbeits-Branch nach `main` mit kurzer
    Zusammenfassung, Testergebnissen und bekannten Einschränkungen eröffnen.
 7. **Nicht selbst mergen** – den PR nur auf ausdrückliche Anweisung des Benutzers mergen.
+8. **Branch nach dem Merge entfernen** – nach einem erfolgreichen Merge nach `main` die
+   zugehörige `codex/`-Branch lokal und auf `origin` löschen, sofern der Benutzer nichts
+   anderes vorgibt.
