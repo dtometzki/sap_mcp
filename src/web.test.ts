@@ -333,3 +333,42 @@ test("About retains the app version when Git metadata is unavailable", async () 
     assert.deepEqual(await loadAppInfo(directory), { name: "SAP Notes", version: "9.8.7", commit: null });
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+test("desktop workspace fits the viewport and long notes reflow without horizontal scrolling", async t => {
+  const browser = await browserOrSkip(t); if (!browser) return;
+  const f = await fixture();
+  const page = await browser.newPage();
+  try {
+    const setup = await f.request("/api/setup", "POST", { password: PASSWORD });
+    const token = setup.headers.get("set-cookie")?.split(";")[0]?.slice("sap_web=".length); assert.ok(token);
+    await page.context().addCookies([{ name: "sap_web", value: token, url: f.origin }]);
+    await f.service.check();
+    const gateway = f.gateways[0]; assert.ok(gateway);
+    gateway.note = async number => ({ id: number, title: "A technical note with a long identifier " + "PARAMETER_".repeat(30), url: `https://me.sap.com/notes/${number}`,
+      markdown: "# Solution\n\n" + "A detailed instruction for the affected system.\n\n".repeat(40) + "```sql\n" + "SELECT_LONG_PARAMETER_".repeat(40) + "\n```\n\n| Parameter | Value | Description |\n| --- | --- | --- |\n| " + "VERY_LONG_IDENTIFIER_".repeat(25) + " | enabled | " + "Long description ".repeat(30) + " |" });
+    for (const [width, height] of [[1440, 900], [1024, 768], [900, 650]]) {
+      await page.setViewportSize({ width: width!, height: height! });
+      await page.goto(f.origin); await page.locator("#workspace").waitFor();
+      const empty = await page.evaluate(() => ({ height: document.documentElement.scrollHeight, width: document.documentElement.scrollWidth, viewportHeight: innerHeight, viewportWidth: innerWidth, aboutBottom: document.getElementById("about-link")!.getBoundingClientRect().bottom }));
+      assert.ok(empty.height <= empty.viewportHeight + 1, `empty ${width}x${height}: page height ${empty.height}`);
+      assert.ok(empty.width <= empty.viewportWidth + 1);
+      assert.ok(empty.aboutBottom <= empty.viewportHeight);
+      await page.locator("#query").fill("2170696"); await page.locator("#search-submit").click();
+      await page.locator(".note-body table").waitFor();
+      const filled = await page.evaluate(() => {
+        const note = document.querySelector<HTMLElement>(".note")!;
+        return { height: document.documentElement.scrollHeight, width: document.documentElement.scrollWidth, viewportHeight: innerHeight, viewportWidth: innerWidth, aboutBottom: document.getElementById("about-link")!.getBoundingClientRect().bottom, noteScrollable: note.scrollHeight > note.clientHeight, overflowing: [...document.querySelectorAll<HTMLElement>(".note, .note-body, .note-body pre, .note-body table")].some(element => element.scrollWidth > element.clientWidth + 1) };
+      });
+      assert.ok(filled.height <= filled.viewportHeight + 1, `filled ${width}x${height}: page height ${filled.height}`);
+      assert.ok(filled.width <= filled.viewportWidth + 1);
+      assert.ok(filled.aboutBottom <= filled.viewportHeight);
+      assert.ok(filled.noteScrollable);
+      assert.equal(filled.overflowing, false);
+    }
+    for (const width of [320, 390, 720, 820]) {
+      await page.setViewportSize({ width, height: 640 });
+      const dimensions = await page.evaluate(() => ({ content: document.documentElement.scrollWidth, viewport: innerWidth }));
+      assert.ok(dimensions.content <= dimensions.viewport + 1, `mobile width ${width}: content ${dimensions.content}`);
+    }
+  } finally { await page.close(); await browser.close(); await f.cleanup(); }
+});

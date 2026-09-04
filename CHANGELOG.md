@@ -7,6 +7,15 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.8.1] – 2026-09-04
+
+### Behoben
+- Desktop-Arbeitsbereich passt sich der Fensterhöhe an: Kopfzeile, Suche und
+  Footer mit About bleiben sichtbar; Trefferlisten und Notes scrollen intern.
+- Lange technische Begriffe, Codezeilen und Tabellen werden innerhalb der
+  verfügbaren Breite umgebrochen statt die Seite horizontal zu vergrößern.
+- Auf kleinen Fenstern bleibt die einspaltige, vertikal scrollbare Ansicht erhalten.
+
 ## [1.8.0] – 2026-09-04
 
 ### Hinzugefügt

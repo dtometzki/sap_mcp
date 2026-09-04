@@ -127,6 +127,11 @@ npm run web
    Trefferlimit und Trefferzahl. Fehler und direkt geöffnete Notes erscheinen
    nicht im Suchverlauf; vollständige Note-Inhalte werden nicht dauerhaft gespeichert.
 
+Auf Desktop-Fenstern ab 900 × 650 Pixeln bleiben Kopfzeile, Suche und Footer mit
+**About** gemeinsam sichtbar. Lange Trefferlisten und Notes scrollen innerhalb
+ihrer Bereiche. Technische Bezeichner, Code und Tabellen passen sich der Breite an;
+kleinere Fenster verwenden eine vertikal scrollbare Ansicht.
+
 **Sperren** beendet die SAP-Browser, verwirft entschlüsselte Daten und meldet alle
 App-Browser-Sitzungen ab. Nach einem Serverneustart ist der Tresor ebenfalls gesperrt.
 Das Schließen eines Tabs sperrt den Server nicht; es gibt keine Inaktivitätssperre.
