@@ -106,13 +106,22 @@ export function expandHomePath(path: string): string {
  * Strictly parses an integer ENV variable. Number() (not parseInt) so trailing
  * junk like "60000ms" is rejected instead of silently becoming "60".
  */
-export function intFromEnv(name: string, fallback: number, minimum = 1): number {
+export const MAX_TIMER_MS = 2_147_483_647;
+
+export function intFromEnv(
+  name: string,
+  fallback: number,
+  minimum = 1,
+  maximum = MAX_TIMER_MS,
+): number {
   const raw = process.env[name];
   if (raw === undefined) return fallback;
   const trimmed = raw.trim();
   const parsed = Number(trimmed);
-  if (trimmed === "" || !Number.isInteger(parsed) || parsed < minimum) {
-    throw new Error(`${name} must be an integer >= ${minimum}, got: ${raw}`);
+  if (trimmed === "" || !Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(
+      `${name} must be an integer between ${minimum} and ${maximum}, got: ${raw}`,
+    );
   }
   return parsed;
 }

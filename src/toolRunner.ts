@@ -111,8 +111,15 @@ export class ToolRunner {
   private async persistSessionState(): Promise<void> {
     const now = Date.now();
     if (now - this.lastStateSaveMs < this.options.stateSaveIntervalMs) return;
-    this.lastStateSaveMs = now;
-    await this.deps.saveState().catch(() => undefined);
+    try {
+      await this.deps.saveState();
+      // Only throttle after a successful write. A transient disk error should be retried
+      // by the next tool call instead of suppressing persistence for the whole interval.
+      this.lastStateSaveMs = Date.now();
+    } catch {
+      // State persistence is best-effort and must not turn a successful portal call into
+      // a tool error. The next call will try to save again because the timestamp is unchanged.
+    }
   }
 
   /**

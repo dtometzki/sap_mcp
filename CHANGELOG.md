@@ -7,6 +7,33 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.6.1] – 2026-09-04
+
+### Sicherheit
+- Portal-gelieferte Anhangsnamen bleiben auch in Download- und Auswahlfehlern innerhalb
+  einer festen Untrusted-Markierung; ein Dateiname kann das Begrenzungslabel nicht mehr
+  verändern.
+
+### Behoben
+- Anhang-Downloads erkennen eine Login-Seite auch bei HTTP 200 und lösen dadurch den
+  vorhandenen automatischen Re-Login aus, statt nur einen generischen HTML-Fehler zu melden.
+- Gestreamte Anhang-Chunks werden vollständig geschrieben, auch wenn ein einzelner
+  Dateisystemaufruf nur einen Teil des Buffers übernimmt.
+- Formal gültige, aber strukturell defekte Playwright-Session-Dateien werden wie eine
+  fehlende/abgelaufene Session behandelt und liefern wieder die ausführbare Login-Hilfe.
+- Ein temporär fehlgeschlagener Session-State-Save wird beim nächsten Tool-Aufruf erneut
+  versucht, statt für das gesamte Drosselintervall unterdrückt zu werden.
+- Diagnose-Skripte laden nun dieselbe optionale `.env` wie Server und Login-CLI, sodass
+  insbesondere ein angepasstes `SAP_STATE_PATH` berücksichtigt wird.
+- Zu große Millisekundenwerte werden beim Start abgelehnt, bevor Node sie auf einen
+  praktisch sofortigen Timer verkürzt.
+
+### Geändert
+- `diagnose-search` begrenzt Anzahl und Größe der im Speicher behaltenen XHR-Antworten
+  und dokumentiert Kürzungen im Diagnosebericht.
+- Neue Offline-Tests für Loginseiten bei Anhang-Downloads, Session-State-Struktur,
+  Timer-Grenzen, Untrusted-Anhangsnamen und fehlgeschlagene State-Saves.
+
 ## [1.6.0] – 2026-09-02
 
 ### Behoben

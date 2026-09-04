@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import test from "node:test";
-import { boolFromEnv, hostListFromEnv, intFromEnv, loadConfig } from "./config.js";
+import { MAX_TIMER_MS, boolFromEnv, hostListFromEnv, intFromEnv, loadConfig } from "./config.js";
 import { applyEnv, resetEnvKeysFromFile } from "./env.js";
 
 const TEST_VAR = "SAP_TEST_INT_FROM_ENV";
@@ -29,7 +29,7 @@ test("intFromEnv rejects junk instead of silently truncating it", () => {
   try {
     // parseInt would silently turn all of these into numbers.
     process.env[TEST_VAR] = "60000ms";
-    assert.throws(() => intFromEnv(TEST_VAR, 1), /must be an integer >= 1, got: 60000ms/);
+    assert.throws(() => intFromEnv(TEST_VAR, 1), /must be an integer between 1 and/);
     process.env[TEST_VAR] = "12abc";
     assert.throws(() => intFromEnv(TEST_VAR, 1), /must be an integer/);
     process.env[TEST_VAR] = "12.5";
@@ -37,9 +37,20 @@ test("intFromEnv rejects junk instead of silently truncating it", () => {
     process.env[TEST_VAR] = "";
     assert.throws(() => intFromEnv(TEST_VAR, 1), /must be an integer/);
     process.env[TEST_VAR] = "0";
-    assert.throws(() => intFromEnv(TEST_VAR, 1), /must be an integer >= 1, got: 0/);
+    assert.throws(() => intFromEnv(TEST_VAR, 1), /must be an integer between 1 and/);
     process.env[TEST_VAR] = "-5";
     assert.throws(() => intFromEnv(TEST_VAR, 1), /must be an integer/);
+  } finally {
+    delete process.env[TEST_VAR];
+  }
+});
+
+test("intFromEnv rejects values above Node's timer range", () => {
+  try {
+    process.env[TEST_VAR] = String(MAX_TIMER_MS);
+    assert.equal(intFromEnv(TEST_VAR, 1), MAX_TIMER_MS);
+    process.env[TEST_VAR] = String(MAX_TIMER_MS + 1);
+    assert.throws(() => intFromEnv(TEST_VAR, 1), /between 1 and 2147483647/);
   } finally {
     delete process.env[TEST_VAR];
   }

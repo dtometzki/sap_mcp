@@ -10,8 +10,8 @@ import { fetchNote, resetTokenCache, searchNotes, wrapUntrustedPortalContent } f
 import {
   downloadAttachment,
   fetchAttachmentList,
+  formatAttachmentDownload,
   formatAttachmentList,
-  type AttachmentDownload,
 } from "./attachments.js";
 import { ToolRunner } from "./toolRunner.js";
 
@@ -126,16 +126,6 @@ server.registerTool(
         ),
     ),
 );
-
-function formatAttachmentDownload(download: AttachmentDownload): string {
-  const type = download.contentType ? `, ${download.contentType}` : "";
-  const header = `Saved: ${download.filePath} (${download.bytes} bytes${type})`;
-  if (download.text === undefined) return header;
-  const truncated = download.textTruncated
-    ? `\n\n[Output truncated — the complete file is on disk at ${download.filePath}]`
-    : "";
-  return `${header}\n\n${wrapUntrustedPortalContent(`attachment ${download.attachment.fileName}`, download.text)}${truncated}`;
-}
 
 server.registerTool(
   "sap_note_attachments",

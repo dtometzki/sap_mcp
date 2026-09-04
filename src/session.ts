@@ -103,10 +103,46 @@ function toError(value: unknown): Error {
  * would fail until the file is deleted by hand. Treating it as "no session" instead
  * produces the actionable `npm run login` message and heals on the next login.
  */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Structural validation for the Playwright storage-state fields used by Chromium. */
+export function isUsableStorageState(value: unknown): boolean {
+  if (!isRecord(value) || !Array.isArray(value.cookies) || !Array.isArray(value.origins)) {
+    return false;
+  }
+
+  const cookiesAreValid = value.cookies.every(
+    (cookie) =>
+      isRecord(cookie) &&
+      typeof cookie.name === "string" &&
+      typeof cookie.value === "string" &&
+      typeof cookie.domain === "string" &&
+      typeof cookie.path === "string" &&
+      typeof cookie.expires === "number" &&
+      typeof cookie.httpOnly === "boolean" &&
+      typeof cookie.secure === "boolean" &&
+      typeof cookie.sameSite === "string" &&
+      ["Strict", "Lax", "None"].includes(cookie.sameSite),
+  );
+  const originsAreValid = value.origins.every(
+    (origin) =>
+      isRecord(origin) &&
+      typeof origin.origin === "string" &&
+      Array.isArray(origin.localStorage) &&
+      origin.localStorage.every(
+        (entry) =>
+          isRecord(entry) && typeof entry.name === "string" && typeof entry.value === "string",
+      ),
+  );
+  return cookiesAreValid && originsAreValid;
+}
+
 async function hasUsableState(path: string): Promise<boolean> {
   try {
     const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
-    return typeof parsed === "object" && parsed !== null && "cookies" in parsed;
+    return isUsableStorageState(parsed);
   } catch {
     return false;
   }

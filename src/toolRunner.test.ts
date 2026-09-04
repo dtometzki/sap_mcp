@@ -82,6 +82,22 @@ test("persistSessionState throttles rewrites to the configured interval", async 
   assert.equal(alwaysSave.filter((call) => call === "save").length, 2);
 });
 
+test("a failed state save is retried by the next successful tool call", async () => {
+  let attempts = 0;
+  const { deps } = createDeps({
+    saveState: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("disk temporarily unavailable");
+    },
+  });
+  const runner = new ToolRunner(deps, { idleTimeoutMs: 0, stateSaveIntervalMs: 60_000 });
+
+  await runner.execute(async () => 1, String);
+  await runner.execute(async () => 2, String);
+
+  assert.equal(attempts, 2);
+});
+
 test("execute recovers from SessionExpiredError: close + token reset, clear message", async () => {
   const { deps, calls } = createDeps();
   const runner = new ToolRunner(deps, { idleTimeoutMs: 0, stateSaveIntervalMs: 60_000 });

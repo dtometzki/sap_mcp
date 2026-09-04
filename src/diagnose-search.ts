@@ -2,7 +2,7 @@ import { chmod, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { loadConfig } from "./config.js";
-import { scrubCredentialsFromEnv } from "./env.js";
+import { loadDotEnv, scrubCredentialsFromEnv } from "./env.js";
 import { redactUrlForLog } from "./urls.js";
 import { SapSession } from "./session.js";
 
@@ -39,6 +39,9 @@ const isCoveoSearch = (url: string): boolean =>
   /\.coveo\.com\/rest\/search/i.test(url);
 
 const SENSITIVE_HEADER_PATTERN = /^(authorization|cookie|set-cookie|proxy-authorization)$/i;
+const MAX_CAPTURED_XHR_RESPONSES = 200;
+const MAX_CAPTURED_BODY_CHARS = 512_000;
+const MAX_CAPTURED_BODY_CHARS_TOTAL = 5_000_000;
 
 function redactHeaders(headers: Record<string, string>): Record<string, string> {
   return Object.fromEntries(
@@ -55,6 +58,7 @@ function redactSecret(value: string, secret: string): string {
 
 async function main(): Promise<void> {
   const query = process.argv.slice(2).join(" ").trim() || "HANA Revision";
+  loadDotEnv();
   const config = loadConfig();
   scrubCredentialsFromEnv(); // diagnostics never log in; keep credentials away from Chromium
   const session = new SapSession(config, false);
@@ -65,11 +69,23 @@ async function main(): Promise<void> {
     const coveo: Rec[] = [];
     const allResponses: { url: string; body: string }[] = [];
     let bearer = "";
+    let retainedBodyChars = 0;
+    let truncatedBodies = 0;
+    let droppedResponses = 0;
+
+    const retainBody = (body: string): string => {
+      const remaining = Math.max(0, MAX_CAPTURED_BODY_CHARS_TOTAL - retainedBodyChars);
+      const kept = body.slice(0, Math.min(MAX_CAPTURED_BODY_CHARS, remaining));
+      retainedBodyChars += kept.length;
+      if (kept.length < body.length) truncatedBodies += 1;
+      return kept;
+    };
 
     page.on("request", (req) => {
       if (!isCoveoSearch(req.url())) return;
       const headers = req.headers();
       bearer ||= (headers.authorization ?? "").replace(/^Bearer\s+/i, "").trim();
+      if (coveo.length >= MAX_CAPTURED_XHR_RESPONSES) return;
       coveo.push({
         kind: "request",
         method: req.method(),
@@ -88,15 +104,21 @@ async function main(): Promise<void> {
       } catch {
         /* ignore */
       }
-      allResponses.push({ url: response.url(), body });
+      const retainedBody = retainBody(body);
+      if (allResponses.length < MAX_CAPTURED_XHR_RESPONSES) {
+        allResponses.push({ url: response.url(), body: retainedBody });
+      } else {
+        droppedResponses += 1;
+      }
       if (isCoveoSearch(response.url())) {
+        if (coveo.length >= MAX_CAPTURED_XHR_RESPONSES) return;
         coveo.push({
           kind: "response",
           method: req.method(),
           url: response.url(),
           status: response.status(),
           headers: redactHeaders(response.headers()),
-          body,
+          body: retainedBody,
         });
       }
     });
@@ -137,6 +159,13 @@ async function main(): Promise<void> {
         body: redactSecret(record.body, bearer),
       })),
       tokenPresent: Boolean(bearer),
+      captureLimits: {
+        maxResponses: MAX_CAPTURED_XHR_RESPONSES,
+        maxBodyChars: MAX_CAPTURED_BODY_CHARS,
+        maxBodyCharsTotal: MAX_CAPTURED_BODY_CHARS_TOTAL,
+        truncatedBodies,
+        droppedResponses,
+      },
       tokenOrigins: tokenOrigins.map((origin) => ({
         url: redactUrlForLog(origin.url),
         bodyPreview: redactSecret(origin.bodyPreview, bearer),
