@@ -7,6 +7,17 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.7.1] – 2026-09-04
+
+### Behoben
+- Note-Inhalte werden anhand ihrer fachlichen Abschnitte statt des größten
+  Seitencontainers extrahiert. SAP-Navigation, Werkzeugleisten, Sprachauswahl
+  und Logo-Datenlinks erscheinen nicht mehr im Note-Text.
+- Die Extraktion wartet auf den asynchron geladenen Note-Inhalt und behandelt
+  eine reine Portal-Oberfläche nicht mehr als erfolgreiche Note-Antwort.
+- Tabellen bleiben als Markdown-Tabellen erhalten; relative Referenzlinks werden
+  zu vollständigen URLs aufgelöst und doppelte Note-Nummern im Titel entfernt.
+
 ## [1.7.0] – 2026-09-04
 
 ### Hinzugefügt

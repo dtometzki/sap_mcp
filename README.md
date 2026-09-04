@@ -286,7 +286,11 @@ bis `2147483647` liegen; `0` ist nur bei den ausdrücklich abschaltbaren Optione
 Der Server benutzt bewusst **keine** hartkodierten CSS-Klassen:
 
 * Suche = alle Links, deren `href` auf eine Note-Nummer zeigt (`/notes/<n>`, `/knowledge/en/<n>`, …).
-* Detail = grösster Content-Container (`main`, `article`, `[role=main]`, …) → Markdown.
+* Detail = auf fachliche Note-Abschnitte (z. B. „Symptom“ / „Solution“) warten und
+  deren Inhalt ohne Portal-Navigation, Werkzeugleisten oder Sprachauswahl übernehmen.
+  Explizite Artikel ohne diese Abschnittsnamen benötigen einen passenden Note-Titel;
+  eine reine Portal-Oberfläche wird nicht als Note akzeptiert. Tabellen und
+  Referenzlinks bleiben in Markdown erhalten, Bilder werden ausgelassen.
 * Anhänge = Note-Detail-JSON-API zuerst; schlägt sie fehl, werden Anhang-Links
   (`…attachment…`, `/documents/…`) aus der gerenderten Note-Seite gelesen.
   Heruntergeladen wird ausschliesslich per HTTPS von `*.sap.com`-Hosts.
