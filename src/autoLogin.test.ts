@@ -92,7 +92,7 @@ function testConfig(): Config {
 
 /**
  * Serves the local IdP fixture under the real SAP hostnames so fillLoginForm's
- * allowlist (https://*.sap.com) accepts the page — the same hosts the production
+ * identity-provider allowlist accepts the page — the same hosts the production
  * auto-login types into after SAP_PROBE_URL redirects to accounts.sap.com.
  */
 async function routeSapHostsToFixture(page: Page, origin: string): Promise<void> {
@@ -139,11 +139,59 @@ const chromiumAvailable = await chromium
     await browser.close();
     return true;
   })
-  .catch(() => false);
+  .catch((error: unknown) => {
+    if (process.env.CI === "true") {
+      throw new Error("Chromium must be installed and launchable in CI.", { cause: error });
+    }
+    return false;
+  });
+
+test(
+  "a SAP campaign page cannot receive either credential",
+  { skip: chromiumAvailable ? false : "Chromium unavailable" },
+  async () => {
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const tab = await browser.newPage();
+      await tab.route("**/*", (route) => route.fulfill({
+        contentType: "text/html",
+        body: USER_FORM.replace("</form>", '<input type="password" id="j_password" /></form>'),
+      }));
+      await tab.goto("https://campaign.sap.com/login");
+      await assert.rejects(fillLoginForm(tab, testConfig(), { username: USER, password: PASSWORD }), /approved identity-provider/);
+      assert.equal(await tab.locator("#j_username").inputValue(), "");
+      assert.equal(await tab.locator("#j_password").inputValue(), "");
+    } finally {
+      await browser.close();
+    }
+  },
+);
+
+test(
+  "the password is refused if the username step navigates to another SAP origin",
+  { skip: chromiumAvailable ? false : "Chromium unavailable" },
+  async () => {
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const tab = await browser.newPage();
+      await tab.route("**/*", (route) => route.fulfill({
+        contentType: "text/html",
+        body: new URL(route.request().url()).hostname === "accounts.sap.com"
+          ? USER_FORM.replace('/login/password', 'https://campaign.sap.com/login/password')
+          : passwordForm("/done"),
+      }));
+      await tab.goto("https://accounts.sap.com/login");
+      await assert.rejects(fillLoginForm(tab, testConfig(), { username: USER, password: PASSWORD }), /approved identity-provider/);
+      assert.equal(await tab.locator("#j_password").inputValue(), "");
+    } finally {
+      await browser.close();
+    }
+  },
+);
 
 test(
   "fillLoginForm completes the two-step form and waitForLoginResult confirms the portal",
-  { skip: chromiumAvailable ? false : "Chromium not installed" },
+  { skip: chromiumAvailable ? false : "Chromium unavailable (not installed or launch blocked)" },
   async () => {
     await withIdp("portal", async (browser, origin) => {
       const tab = await openSapLogin(browser, origin);
@@ -156,7 +204,7 @@ test(
 
 test(
   "an MFA prompt aborts the automatic login permanently",
-  { skip: chromiumAvailable ? false : "Chromium not installed" },
+  { skip: chromiumAvailable ? false : "Chromium unavailable (not installed or launch blocked)" },
   async () => {
     await withIdp("mfa", async (browser, origin) => {
       const tab = await openSapLogin(browser, origin);
@@ -169,15 +217,16 @@ test(
 );
 
 test(
-  "rejected credentials surface the portal's message and are not retried",
-  { skip: chromiumAvailable ? false : "Chromium not installed" },
+  "rejected credentials are reported without echoing the portal message",
+  { skip: chromiumAvailable ? false : "Chromium unavailable (not installed or launch blocked)" },
   async () => {
     await withIdp("reject", async (browser, origin) => {
       const tab = await openSapLogin(browser, origin);
       await fillLoginForm(tab, testConfig(), { username: USER, password: "wrong" });
       const error = await waitForLoginResult(tab, testConfig()).catch((e: unknown) => e);
       assert.ok(error instanceof AutoLoginError);
-      assert.match(error.message, /Wrong credentials/);
+      assert.match(error.message, /rejected the login/);
+      assert.doesNotMatch(error.message, /Wrong credentials/);
       assert.equal(error.permanent, true);
     });
   },
@@ -185,7 +234,7 @@ test(
 
 test(
   "a missing login form fails fast instead of hanging",
-  { skip: chromiumAvailable ? false : "Chromium not installed" },
+  { skip: chromiumAvailable ? false : "Chromium unavailable (not installed or launch blocked)" },
   async () => {
     await withIdp("portal", async (browser, origin) => {
       const tab = await (await browser.newContext()).newPage();
@@ -202,14 +251,14 @@ test(
 
 test(
   "fillLoginForm refuses to type credentials on a non-SAP host",
-  { skip: chromiumAvailable ? false : "Chromium not installed" },
+  { skip: chromiumAvailable ? false : "Chromium unavailable (not installed or launch blocked)" },
   async () => {
     await withIdp("portal", async (browser, origin) => {
       const tab = await (await browser.newContext()).newPage();
       await tab.goto(`${origin}/login`);
       await assert.rejects(
         fillLoginForm(tab, testConfig(), { username: USER, password: PASSWORD }),
-        /non-SAP host/,
+        /outside the approved identity-provider origins/,
       );
     });
   },
@@ -217,7 +266,7 @@ test(
 
 test(
   "a generic banner next to the form does not abort a login that succeeds",
-  { skip: chromiumAvailable ? false : "Chromium not installed" },
+  { skip: chromiumAvailable ? false : "Chromium unavailable (not installed or launch blocked)" },
   async () => {
     await withIdp("banner", async (browser, origin) => {
       const tab = await openSapLogin(browser, origin);
@@ -230,7 +279,7 @@ test(
 
 test(
   "a stuck login with only a generic banner is reported but not marked permanent",
-  { skip: chromiumAvailable ? false : "Chromium not installed" },
+  { skip: chromiumAvailable ? false : "Chromium unavailable (not installed or launch blocked)" },
   async () => {
     await withIdp("banner-stuck", async (browser, origin) => {
       const tab = await openSapLogin(browser, origin);
@@ -239,7 +288,8 @@ test(
       const error = await waitForLoginResult(tab, config).catch((e: unknown) => e);
       assert.ok(error instanceof AutoLoginError);
       assert.match(error.message, /did not complete/);
-      assert.match(error.message, /Service temporarily unavailable/);
+      assert.match(error.message, /page displays a notice/);
+      assert.doesNotMatch(error.message, /Service temporarily unavailable/);
       assert.equal(error.permanent, false);
     });
   },

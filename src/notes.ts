@@ -1,3 +1,5 @@
+import { PublicError, safeErrorMessage } from "./errors.js";
+import { rejectApiRedirect } from "./api.js";
 import TurndownService from "turndown";
 import type { Page } from "playwright";
 import { z } from "zod";
@@ -36,7 +38,7 @@ export async function withRetry<T>(fn: () => Promise<T>, retries = 1, delayMs = 
 }
 
 export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return safeErrorMessage(error);
 }
 
 export interface NoteHit {
@@ -127,7 +129,7 @@ export async function searchNotes(
   } catch (error) {
     if (error instanceof SessionExpiredError || error instanceof AccessDeniedError) throw error;
     // Coveo (org id / token endpoint) may have changed; try the legacy scrape before giving up.
-    // Log the original error to stderr (safe for stdio MCP) so it is not silently lost.
+    // Keep an actionable category on stderr without exposing library call logs.
     console.error(`Coveo search failed, falling back to DOM scrape: ${errorMessage(error)}`);
     let hits: NoteHit[];
     try {
@@ -136,7 +138,7 @@ export async function searchNotes(
       if (fallbackError instanceof SessionExpiredError || fallbackError instanceof AccessDeniedError) {
         throw fallbackError;
       }
-      throw new Error(
+      throw new PublicError(
         `Search failed: ${errorMessage(error)} (DOM fallback: ${errorMessage(fallbackError)})`,
         { cause: error },
       );
@@ -145,7 +147,7 @@ export async function searchNotes(
     // case that Coveo moved, and reporting [] here would turn a broken backend into a
     // confident "No notes found" answer.
     if (hits.length === 0) {
-      throw new Error(
+      throw new PublicError(
         `Search failed: ${errorMessage(error)} (the DOM fallback found nothing either)`,
         { cause: error },
       );
@@ -190,7 +192,7 @@ export function parseCoveoResponse(payload: unknown): CoveoResponse {
       .slice(0, 3)
       .map((issue) => `${issue.path.join(".") || "response"}: ${issue.message}`)
       .join("; ");
-    throw new Error(`Unexpected Coveo response schema (${summary})`);
+    throw new PublicError(`Unexpected Coveo response schema (${summary})`);
   }
   return parsed.data;
 }
@@ -244,16 +246,18 @@ async function fetchCoveoToken(session: SapSession, config: Config): Promise<str
     .get(config.coveoTokenUrl, {
       headers: { accept: "application/json" },
       timeout: config.apiTimeoutMs,
+      maxRedirects: 0,
     });
 
   try {
+    rejectApiRedirect(response);
     if (response.url() && !isAllowedApiUrl(response.url())) {
-      throw new Error(`Refusing Coveo token response from non-SAP host: ${response.url()}`);
+      throw new PublicError("Refusing Coveo token response from a disallowed host.");
     }
     if (!response.ok()) {
       cachedToken = undefined;
       assertNotLoggedOut(response.status(), response.url(), "Coveo token endpoint", response.ok());
-      throw new Error(`Coveo token request failed: HTTP ${response.status()}`);
+      throw new PublicError(`Coveo token request failed: HTTP ${response.status()}`);
     }
 
     let payload: unknown;
@@ -265,10 +269,10 @@ async function fetchCoveoToken(session: SapSession, config: Config): Promise<str
       if (/text\/html/i.test(contentType) || looksLikeLoginPage(response.url())) {
         throw new SessionExpiredError();
       }
-      throw new Error("Coveo token endpoint returned invalid JSON.");
+      throw new PublicError("Coveo token endpoint returned invalid JSON.");
     }
     const parsed = CoveoTokenSchema.safeParse(payload);
-    if (!parsed.success) throw new Error("Coveo token endpoint returned no valid token.");
+    if (!parsed.success) throw new PublicError("Coveo token endpoint returned no valid token.");
     cachedToken = { value: parsed.data.token, expiresAt: Date.now() + TOKEN_TTL_MS };
     return parsed.data.token;
   } finally {
@@ -286,7 +290,7 @@ const MAX_COVEO_PAGES = 3;
  * dedicated error the search would fall through to the DOM scrape while every following
  * call keeps reusing the same dead token until the cache expires.
  */
-export class CoveoTokenRejectedError extends Error {
+export class CoveoTokenRejectedError extends PublicError {
   constructor(status: number) {
     super(`Coveo rejected the search token: HTTP ${status}`);
     this.name = "CoveoTokenRejectedError";
@@ -304,6 +308,7 @@ async function postCoveoSearch(
   const response = await session.request().post(config.coveoSearchUrl, {
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     timeout: config.apiTimeoutMs,
+    maxRedirects: 0,
     data: {
       locale: "en-US",
       q: query,
@@ -318,12 +323,13 @@ async function postCoveoSearch(
   });
 
   try {
+    rejectApiRedirect(response);
     if (response.url() && !isAllowedApiUrl(response.url())) {
-      throw new Error(`Refusing Coveo search response from non-SAP host: ${response.url()}`);
+      throw new PublicError("Refusing Coveo search response from a disallowed host.");
     }
     const status = response.status();
     if (status === 401 || status === 403) throw new CoveoTokenRejectedError(status);
-    if (!response.ok()) throw new Error(`Coveo search failed: HTTP ${status}`);
+    if (!response.ok()) throw new PublicError(`Coveo search failed: HTTP ${status}`);
     return parseCoveoResponse(await response.json());
   } finally {
     await response.dispose().catch(() => undefined);
@@ -422,7 +428,7 @@ export async function fetchNote(
       const markdown = turndown.turndown(html).replace(/\n{3,}/g, "\n\n").trim();
 
       if (markdown.length < 50) {
-        throw new Error(
+        throw new PublicError(
           `Note ${id} returned no readable content. The note may not exist, may be ` +
             `restricted for your S-user, or the portal layout changed (adjust SAP_NOTE_URL).`,
         );

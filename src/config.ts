@@ -1,3 +1,4 @@
+import { PublicError } from "./errors.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { envKeysFromFile } from "./env.js";
@@ -119,8 +120,8 @@ export function intFromEnv(
   const trimmed = raw.trim();
   const parsed = Number(trimmed);
   if (trimmed === "" || !Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
-    throw new Error(
-      `${name} must be an integer between ${minimum} and ${maximum}, got: ${raw}`,
+    throw new PublicError(
+      `${name} must be an integer between ${minimum} and ${maximum}`,
     );
   }
   return parsed;
@@ -136,7 +137,7 @@ export function boolFromEnv(name: string, fallback: boolean): boolean {
   const value = raw.trim().toLowerCase();
   if (["1", "true", "yes", "on"].includes(value)) return true;
   if (["0", "false", "no", "off"].includes(value)) return false;
-  throw new Error(`${name} must be one of 1/0/true/false/yes/no/on/off, got: ${raw}`);
+  throw new PublicError(`${name} must be one of 1/0/true/false/yes/no/on/off`);
 }
 
 /**
@@ -171,7 +172,7 @@ export function hostListFromEnv(name: string): string[] {
     const host = part.trim().toLowerCase();
     if (host === "") continue;
     if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/.test(host)) {
-      throw new Error(`${name} contains an invalid hostname: ${part}`);
+      throw new PublicError(`${name} contains an invalid hostname.`);
     }
     hosts.push(host);
   }
@@ -188,14 +189,14 @@ function assertConfigUrl(
   const resolved =
     Object.keys(placeholders).length > 0 ? buildUrl(template, placeholders) : template;
   if (!allowed(resolved)) {
-    throw new Error(`${name} must be an https URL on ${hint}, got: ${template}`);
+    throw new PublicError(`${name} must be an https URL on ${hint}`);
   }
 }
 
 export function loadConfig(): Config {
   const coveoOrg = process.env.SAP_COVEO_ORG ?? "sapamericaproductiontyfzmfz0";
   if (!/^[A-Za-z0-9-]+$/.test(coveoOrg)) {
-    throw new Error(`SAP_COVEO_ORG must contain only letters, digits and hyphens, got: ${coveoOrg}`);
+    throw new PublicError(`SAP_COVEO_ORG must contain only letters, digits and hyphens`);
   }
   // SAPUSER/SAPPASSWORD are the documented names; the older SAP_* spellings stay valid.
   const username = stringFromEnv("SAPUSER", "SAP_USERNAME");
@@ -257,7 +258,7 @@ export function buildUrl(template: string, values: Record<string, string>): stri
   return template.replace(/\{(\w+)\}/g, (_match, key: string) => {
     const value = values[key];
     if (value === undefined) {
-      throw new Error(`URL template placeholder {${key}} has no value`);
+      throw new PublicError(`URL template placeholder {${key}} has no value`);
     }
     return encodeURIComponent(value);
   });

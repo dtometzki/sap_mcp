@@ -130,7 +130,7 @@ test("execute wraps unknown errors without tearing the session down", async () =
     throw new Error("network hiccup");
   }, String);
   assert.equal(response.isError, true);
-  assert.equal(response.content[0]!.text, "SAP portal request failed: network hiccup");
+  assert.equal(response.content[0]!.text, "SAP portal request failed: Operation failed. Internal error details were withheld to protect credentials.");
   // The session was ensured (as always), but neither saved nor closed: the error is
   // not an expiry, so the browser stays warm for the next tool call.
   assert.deepEqual(calls, ["ensure"]);

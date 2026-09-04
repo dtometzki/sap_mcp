@@ -17,5 +17,6 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
-      # Offline unit tests only — no SAP session and no Playwright browser needed.
+      - run: npx playwright install --with-deps chromium
+      # Local HTTP/browser fixtures only — no SAP session or SAP requests.
       - run: npm test

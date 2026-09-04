@@ -1,3 +1,5 @@
+import { PublicError } from "./errors.js";
+
 /**
  * Host allowlists for navigation, API calls, login form-filling and downloads.
  *
@@ -8,6 +10,9 @@
 
 /** Browser pages, session probe, token endpoint, note/search URLs. */
 export const PAGE_HOST_ROOTS = ["sap.com", "sap.cn"] as const;
+
+/** Exact identity-provider origins; portal/campaign sites must never receive passwords. */
+export const LOGIN_ORIGINS = ["https://accounts.sap.com", "https://accounts.sap.cn"] as const;
 
 /** Direct HTTP APIs: the portal hosts plus Coveo (the note search backend). */
 export const API_HOST_ROOTS = ["sap.com", "sap.cn", "coveo.com"] as const;
@@ -52,7 +57,8 @@ export function isAllowedPageUrl(url: string): boolean {
 }
 
 export function isAllowedLoginUrl(url: string): boolean {
-  return isAllowedPageUrl(url);
+  const parsed = parseAllowedHttpsUrl(url, PAGE_HOST_ROOTS);
+  return parsed !== undefined && LOGIN_ORIGINS.some((origin) => parsed.origin === origin);
 }
 
 export function isAllowedApiUrl(url: string): boolean {
@@ -92,17 +98,16 @@ export function redactUrlForLog(url: string): string {
 
 export function assertAllowedPageUrl(url: string, subject = "navigation"): void {
   if (!isAllowedPageUrl(url)) {
-    throw new Error(
-      `Refusing ${subject} to a host outside https://*.sap.com / https://*.sap.cn: ${url}`,
+    throw new PublicError(
+      `Refusing ${subject} to a host outside https://*.sap.com / https://*.sap.cn.`,
     );
   }
 }
 
 export function assertAllowedApiUrl(url: string, subject = "API request"): void {
   if (!isAllowedApiUrl(url)) {
-    throw new Error(
-      `Refusing ${subject} to a host outside sap.com / sap.cn / coveo.com: ${url}`,
+    throw new PublicError(
+      `Refusing ${subject} to a host outside sap.com / sap.cn / coveo.com.`,
     );
   }
 }
-

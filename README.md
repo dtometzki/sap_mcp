@@ -82,6 +82,17 @@ Damit gilt:
   der Client bekommt die gewohnte Meldung mit dem Hinweis auf `npm run login`.
 * `SAP_AUTO_LOGIN=0` schaltet die Automatik ab, ohne die Credentials zu entfernen.
 
+Die automatische Eingabe von Benutzer und Passwort ist ausschließlich auf
+`https://accounts.sap.com` und `https://accounts.sap.cn` erlaubt (Standardport 443).
+Andere SAP-Subdomains sind keine freigegebenen Login-Seiten. Verwendet die Anmeldung
+einen anderen Identity Provider, ist der interaktive Login ohne hinterlegtes Passwort
+erforderlich. Die Origin wird vor jeder Eingabe erneut geprüft.
+
+Fehlerausgaben enthalten nur explizite Anwendungsmeldungen oder feste Fehlerkategorien.
+Interne Playwright-Aufrufprotokolle und Login-Banner werden nicht ausgegeben, da sie
+Tokens, Cookies oder Passworteingaben enthalten können. Details zur Ablehnung einer
+Anmeldung lassen sich im interaktiven Browser ansehen.
+
 Sicherheitshinweise: Das Passwort steht im Klartext in der `.env` (bereits in
 `.gitignore`) — daher `chmod 600` und auf Multi-User-Hosts besser bei
 `npm run login` + gespeicherter Session bleiben. MFA lässt sich prinzipbedingt nicht
@@ -136,6 +147,13 @@ nicht: Für den Browser gilt die Proxy-Konfiguration des Systems bzw. Playwright
 beachtet `HTTPS_PROXY` nur, wenn Node mit `NODE_USE_ENV_PROXY=1` (Node ≥ 24) gestartet
 wird. Bei einem hängenden Download also zuerst prüfen, ob der Proxy für `fetch` gesetzt ist.
 
+Die drei direkten API-Aufrufe folgen keinen HTTP-Weiterleitungen. Ein Redirect zu
+einem freigegebenen Login-Origin wird als abgelaufene Session behandelt; andere
+Redirects führen zu einem Fehler beziehungsweise dem bestehenden DOM-Fallback.
+Bei dauerhaft geänderten API-Adressen muss die konfigurierte URL direkt auf den
+neuen Endpunkt zeigen. Für Anhang-Downloads bleibt die Prüfung jedes Redirect-Ziels
+vor dem nächsten HTTP-Aufruf bestehen.
+
 Schlägt die Coveo-Suche bzw. die Note-Detail-API fehl und liefert auch der DOM-Fallback
 nichts, melden `sap_notes_search` und `sap_note_attachments` den ursprünglichen Fehler
 statt „keine Treffer“ / „keine Anhänge“ — eine leere Antwort ist damit immer eine echte
@@ -189,8 +207,8 @@ Der Server benutzt bewusst **keine** hartkodierten CSS-Klassen:
 (URL im Browser kopieren, Suchbegriff durch `{query}`, Nummer durch `{id}` ersetzen).
 Portal- und Login-URLs müssen HTTPS auf `*.sap.com` / `*.sap.cn` bleiben (die
 Coveo-Suche zusätzlich `*.coveo.com`). Andere Werte — `http:`, `file:`, fremde
-Hosts — lehnt der Server beim Start ab. Der Auto-Login tippt Benutzer und Passwort
-nur auf einer erlaubten SAP-Seite; nach einem Redirect weg von SAP bricht er ab.
+Hosts — lehnt der Server beim Start ab. Für die automatische Eingabe von Zugangsdaten
+gilt die engere Origin-Liste `https://accounts.sap.com` / `https://accounts.sap.cn`.
 
 ## Grenzen
 
@@ -218,5 +236,8 @@ Das Diagnose-Skript entfernt Zugangstoken und Cookie-Header vor dem Schreiben un
 Mitschnitt kann dennoch geschützte SAP-Suchergebnisse enthalten und sollte nicht
 weitergegeben oder committed werden.
 
-Lint (typescript-eslint, type-aware) und die Offline-Tests laufen zusätzlich in der CI
-(`.github/workflows/ci-workflow.yml`) bei jedem Push/PR — ohne SAP-Session und ohne Browser.
+Lint (typescript-eslint, type-aware) und die Tests laufen zusätzlich in der CI
+(`.github/workflows/ci-workflow.yml`) bei jedem Push/PR. Die HTTP- und Browser-Fixtures
+benötigen keine SAP-Session und senden keine Anfragen an SAP. CI installiert Chromium
+und verlangt erfolgreiche Browser-Tests. Lokal werden Browser-Tests übersprungen,
+wenn Chromium fehlt oder nicht gestartet werden darf; die übrigen Tests laufen weiter.
