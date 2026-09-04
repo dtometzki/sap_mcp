@@ -7,6 +7,13 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.8.0] – 2026-09-04
+
+### Hinzugefügt
+- About-Link im Footer mit App-Name, Version und letztem Git-Commit inklusive
+  Nachricht und Datum. Auch bei gesperrtem Tresor verfügbar; ohne Git-Metadaten
+  werden Name und Version weiterhin angezeigt.
+
 ## [1.7.1] – 2026-09-04
 
 ### Behoben

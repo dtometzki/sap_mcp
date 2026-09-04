@@ -6,6 +6,7 @@ import { AccessDeniedError, SessionExpiredError } from "../session.js";
 import { credentialsSchema, masterSchema, WebError, locked } from "./vault.js";
 import { type WebService } from "./sap.js";
 import { renderNote } from "./markdown.js";
+import { loadAppInfo } from "./about.js";
 
 const searchSchema = z.object({ query: z.string().trim().min(2).max(500), limit: z.number().int().min(1).max(25).default(10) }).strict();
 const numberSchema = z.string().regex(/^\d{4,10}$/);
@@ -38,6 +39,9 @@ function json(response: ServerResponse, status: number, data: unknown): void {
 
 /** Fixed loopback host, authenticated API and same-origin JSON mutations (no CORS). */
 export function createWebServer(service: WebService) {
+  const appInfo = loadAppInfo();
+  // Observe an early read failure even if the About endpoint is never requested.
+  void appInfo.catch(() => undefined);
   const sessions = new Set<string>();
   let generation = 0;
   let authBusy = false;
@@ -82,6 +86,9 @@ export function createWebServer(service: WebService) {
       if (method === "GET" && asset) {
         const file = await readFile(asset.url);
         response.writeHead(200, { "Content-Type": asset.type }); response.end(file); return;
+      }
+      if (path === "/api/about" && method === "GET") {
+        json(response, 200, await appInfo); return;
       }
       const cookie = request.headers.cookie?.split(";").map(item => item.trim()).find(item => item.startsWith("sap_web="))?.slice(8);
       const hasSession = (): boolean => cookie !== undefined && sessions.has(cookie) && service.vault.unlocked && !locking;

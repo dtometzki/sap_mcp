@@ -10,6 +10,7 @@ import { Vault, WebError } from "./web/vault.js";
 import { WebService, type SapGateway, type SapStatus } from "./web/sap.js";
 import { createWebServer } from "./web/http.js";
 import { renderNote } from "./web/markdown.js";
+import { loadAppInfo, type AppInfo } from "./web/about.js";
 import { SapSession, AccessDeniedError, SessionExpiredError, type SessionState, type SessionStore } from "./session.js";
 import { loadConfig } from "./config.js";
 import type { NoteHit } from "./notes.js";
@@ -116,6 +117,11 @@ test("HTTP API enforces authentication, host/origin protection and private no-st
   const f = await fixture();
   try {
     assert.equal((await f.request("/")).status, 200);
+    const about = await (await f.request("/api/about")).json() as AppInfo;
+    assert.equal(about.name, "SAP Notes");
+    assert.match(about.version, /^\d+\.\d+\.\d+/);
+    assert.ok(about.commit); assert.match(about.commit.hash, /^[a-f0-9]{40,64}$/);
+    assert.equal((await f.request("/api/about", "GET", undefined, { Origin: "https://evil.example" })).status, 403);
     assert.match(await (await f.request("/app.js")).text(), /unlock-form/);
     for (const path of ["/api/history", "/api/notes/2170696"]) assert.equal((await f.request(path)).status, 401);
     assert.equal((await f.request("/api/setup", "POST", { password: PASSWORD }, { Origin: "https://evil.example" })).status, 403);
@@ -254,6 +260,14 @@ test("browser acceptance flow and WebMCP contracts use the same visible applicat
   try {
     await page.goto(f.origin);
     await page.getByRole("heading", { name: "Deinen Tresor einrichten" }).waitFor();
+    await page.getByRole("link", { name: "About", exact: true }).click();
+    await page.locator("#about-details").waitFor();
+    assert.equal(await page.locator("#about-name").textContent(), "SAP Notes");
+    assert.match(await page.locator("#about-version").textContent() ?? "", /^\d+\.\d+\.\d+/);
+    assert.match(await page.locator("#about-commit").textContent() ?? "", /^[a-f0-9]{12}$/);
+    await page.keyboard.press("Escape");
+    await page.locator("#about").waitFor({ state: "hidden" });
+    assert.equal(await page.getByRole("link", { name: "About", exact: true }).evaluate(element => element === document.activeElement), true);
     await page.locator("#master").fill(PASSWORD); await page.locator("#master-confirm").fill(PASSWORD);
     await page.getByRole("button", { name: "Tresor anlegen" }).click();
     await page.getByRole("heading", { name: "Deine Einstellungen" }).waitFor();
@@ -307,4 +321,15 @@ test("a delayed authenticated request body cannot mutate a newly unlocked sessio
     assert.equal(await delayed, 401);
     assert.equal(f.vault.snapshot().credentials, undefined);
   } finally { await f.cleanup(); }
+});
+
+
+test("About retains the app version when Git metadata is unavailable", async () => {
+  const { directory } = await temporary();
+  try {
+    await writeFile(join(directory, "package.json"), JSON.stringify({ version: "9.8.7" }));
+    assert.deepEqual(await loadAppInfo(directory), { name: "SAP Notes", version: "9.8.7", commit: null });
+    await writeFile(join(directory, ".git"), "gitdir: /nonexistent/about-test-repository");
+    assert.deepEqual(await loadAppInfo(directory), { name: "SAP Notes", version: "9.8.7", commit: null });
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });

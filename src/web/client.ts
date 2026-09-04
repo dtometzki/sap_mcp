@@ -1,6 +1,7 @@
 import type { NoteHit, NoteDetail } from "../notes.js";
 import type { HistoryEntry } from "./vault.js";
 import type { SapStatus } from "./sap.js";
+import type { AppInfo } from "./about.js";
 
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
   const found = document.getElementById(id);
@@ -208,6 +209,30 @@ form("password-form", async () => {
 click("login-start", async () => { await api("/api/sap/login/start", "POST"); await refreshState(); });
 click("login-finish", async () => { await api("/api/sap/login/finish", "POST"); await checkSap(); });
 click("login-cancel", async () => { await api("/api/sap/login/cancel", "POST"); await refreshState(); });
+async function showAbout(): Promise<void> {
+  const dialog = el<HTMLDialogElement>("about");
+  if (!dialog.open) dialog.showModal();
+  el("about-status").hidden = false;
+  el("about-status").textContent = "App-Informationen werden geladen …";
+  el("about-details").hidden = true;
+  try {
+    const info = await api<AppInfo>("/api/about");
+    el("about-name").textContent = info.name;
+    el("about-version").textContent = info.version;
+    el("about-commit").textContent = info.commit?.hash.slice(0, 12) ?? "Nicht verfügbar";
+    el("about-commit").title = info.commit?.hash ?? "Keine Git-Informationen vorhanden";
+    el("about-subject").textContent = info.commit?.subject ?? "";
+    const date = el<HTMLTimeElement>("about-date");
+    date.textContent = info.commit ? new Date(info.commit.date).toLocaleString("de-DE") : "";
+    date.dateTime = info.commit?.date ?? "";
+    el("about-status").hidden = true;
+    el("about-details").hidden = false;
+  } catch {
+    el("about-status").textContent = "App-Informationen konnten nicht geladen werden. Bitte About erneut öffnen.";
+  }
+}
+el("about-link").addEventListener("click", event => { event.preventDefault(); void showAbout(); });
+if (window.location.hash === "#about") void showAbout();
 window.addEventListener("pagehide", clearPrivateView);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) void refreshState().catch(() => undefined); });
 setInterval(() => { if (state.unlocked && !document.hidden) void refreshState().catch(() => undefined); }, 5000);

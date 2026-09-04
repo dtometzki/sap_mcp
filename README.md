@@ -133,6 +133,11 @@ Das Schließen eines Tabs sperrt den Server nicht; es gibt keine Inaktivitätssp
 Weitere Browser benötigen das Master-Passwort zum Entsperren ihrer eigenen Sitzung.
 Ändern des Master-Passworts meldet die anderen Browser-Sitzungen ab.
 
+Über **About** im Footer sind App-Name, Version sowie Hash, Nachricht und Datum
+des letzten Commits sichtbar – auch bei gesperrtem Tresor. Die Angaben entsprechen
+dem Projektstand beim Serverstart. Nach einem Update die App neu starten; bei einer
+Installation ohne Git-Metadaten steht beim Commit „Nicht verfügbar“.
+
 ### Web-Konfiguration und Speicherung
 
 | Variable | Default | Zweck |
