@@ -7,6 +7,25 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.6.2] – 2026-09-04
+
+### Behoben
+- MCP-Antworten und Fehlerprotokolle geben keine internen Playwright-Diagnosen mehr
+  aus, die Authorization-Header, Session-Cookies, URLs oder Passworteingaben enthalten
+  können. Nur explizite Anwendungsmeldungen bleiben erhalten; Login-Banner werden
+  nicht in Fehlermeldungen übernommen.
+- Automatische Eingabe von Zugangsdaten ist auf die exakten HTTPS-Origins
+  `accounts.sap.com` und `accounts.sap.cn` beschränkt, auch zwischen Login-Schritten.
+- Coveo-Token, Coveo-Suche und Note-Detail-API folgen keinen HTTP-Weiterleitungen mehr.
+  Redirects zum freigegebenen Identity Provider lösen weiterhin die Session-Recovery aus.
+- Indirekte Abhängigkeit `qs` auf 6.16.0 aktualisiert (GHSA-4mjr-xmp4-gh2g und
+  GHSA-x5fp-wj9c-mxmx).
+
+### Geändert
+- Regressionstests für Geheimnisse in Fehlerausgaben, Redirects an allen drei APIs
+  und Login-Formulare auf nicht freigegebenen SAP-Subdomains; CI führt die Browser-Tests
+  mit installiertem Chromium aus.
+
 ## [1.6.1] – 2026-09-04
 
 ### Sicherheit

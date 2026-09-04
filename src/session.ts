@@ -1,3 +1,4 @@
+import { PublicError } from "./errors.js";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
@@ -10,7 +11,7 @@ import {
 import type { Config } from "./config.js";
 import { assertAllowedPageUrl } from "./urls.js";
 
-export class SessionExpiredError extends Error {
+export class SessionExpiredError extends PublicError {
   constructor() {
     super(
       "SAP session is missing or expired. Run `npm run login` on the machine hosting " +
@@ -27,7 +28,7 @@ export class SessionExpiredError extends Error {
  * browser down nor tells the user to log in again — no login can fix an authorization
  * gap — and so the callers skip their "the portal must have changed" DOM fallbacks.
  */
-export class AccessDeniedError extends Error {
+export class AccessDeniedError extends PublicError {
   constructor(subject: string) {
     super(
       `${subject}: the SAP portal denied access (HTTP 403). The session is valid, but your ` +
@@ -234,7 +235,7 @@ export class SapSession {
         throw new SessionExpiredError();
       }
       if (response?.status() === 403) {
-        throw new AccessDeniedError(url);
+        throw new AccessDeniedError("Portal page");
       }
       await page
         .waitForLoadState("networkidle", { timeout: this.config.networkIdleTimeoutMs })

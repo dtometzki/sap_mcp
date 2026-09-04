@@ -1,3 +1,4 @@
+import { PublicError } from "./errors.js";
 import type { Page } from "playwright";
 import type { Config } from "./config.js";
 import { SapSession, looksLikeLoginPage } from "./session.js";
@@ -12,7 +13,7 @@ import { isAllowedLoginUrl } from "./urls.js";
  */
 
 /** A failed automatic login. `permanent` marks causes that a retry cannot fix. */
-export class AutoLoginError extends Error {
+export class AutoLoginError extends PublicError {
   constructor(
     message: string,
     /** Retrying with the same credentials would fail exactly the same way. */
@@ -88,8 +89,8 @@ function assertTrustedLoginPage(page: Page): void {
   const url = page.url();
   if (isAllowedLoginUrl(url)) return;
   throw new AutoLoginError(
-    `Refusing to enter credentials on a non-SAP host (${url}). ` +
-      `Automatic login only types the S-user password on https://*.sap.com / https://*.sap.cn. ` +
+    `Refusing to enter credentials outside the approved identity-provider origins. ` +
+      `Automatic login only types on https://accounts.sap.com / https://accounts.sap.cn. ` +
       `Check SAP_PROBE_URL.`,
     true,
   );
@@ -167,7 +168,10 @@ export async function waitForLoginResult(page: Page, config: Config): Promise<vo
 
     const rejection = await bannerText(page, LOGIN_REJECTION_SELECTOR);
     if (rejection !== "") {
-      throw new AutoLoginError(`The SAP identity provider rejected the login: ${rejection}`, true);
+      throw new AutoLoginError(
+        "The SAP identity provider rejected the login. Run `npm run login` to inspect the message.",
+        true,
+      );
     }
 
     await page.waitForTimeout(POLL_INTERVAL_MS);
@@ -178,7 +182,7 @@ export async function waitForLoginResult(page: Page, config: Config): Promise<vo
   throw new AutoLoginError(
     "The login did not complete within SAP_LOGIN_STEP_TIMEOUT_MS. Run `npm run login` to " +
       "see what the portal is showing." +
-      (notice === "" ? "" : ` The page shows: ${notice}`),
+      (notice === "" ? "" : " The page displays a notice; inspect it in the interactive login."),
   );
 }
 

@@ -1,3 +1,4 @@
+import { PublicError, safeErrorMessage } from "./errors.js";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { loadConfig } from "./config.js";
@@ -9,7 +10,7 @@ import {
   waitForLoginResult,
   MfaRequiredError,
 } from "./autoLogin.js";
-import { isAllowedLoginUrl } from "./urls.js";
+import { isAllowedPageUrl, isAllowedLoginUrl } from "./urls.js";
 
 /**
  * Interactive login. Run once per machine (and again whenever the session expires).
@@ -33,9 +34,9 @@ async function main(): Promise<void> {
     await session.start({ allowMissingState: true, ignoreStoredState: true });
     const page = await session.newPage();
     await page.goto(config.sessionProbeUrl, { waitUntil: "domcontentloaded" });
-    if (!isAllowedLoginUrl(page.url())) {
-      throw new Error(
-        `The browser left the SAP domain (${page.url()}). Aborting so credentials are not ` +
+    if (!isAllowedPageUrl(page.url())) {
+      throw new PublicError(
+        `The browser left the SAP domain. Aborting so credentials are not ` +
           `typed on a foreign page. Check SAP_PROBE_URL.`,
       );
     }
@@ -53,10 +54,10 @@ async function main(): Promise<void> {
         console.log(
           error instanceof MfaRequiredError
             ? "\nMFA required — please complete it in the browser window."
-            : `\nAutomatic login could not finish: ${error instanceof Error ? error.message : String(error)}`,
+            : `\nAutomatic login could not finish: ${safeErrorMessage(error)}`,
         );
       }
-    } else if (config.username) {
+    } else if (config.username && isAllowedLoginUrl(page.url())) {
       // Best-effort prefill; the SAP identity provider changes field ids over time,
       // so failure here is not fatal — the user simply types the credentials.
       await page
@@ -72,7 +73,7 @@ async function main(): Promise<void> {
 
     console.log("\nChecking the session (this can take a few seconds)...");
     if (!(await session.isAuthenticated())) {
-      throw new Error("Still not authenticated — the portal keeps redirecting to the login page.");
+      throw new PublicError("Still not authenticated — the portal keeps redirecting to the login page.");
     }
 
     await session.saveState();
@@ -91,6 +92,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  console.error("Login failed:", error instanceof Error ? error.message : error);
+  console.error("Login failed:", safeErrorMessage(error));
   process.exitCode = 1;
 });

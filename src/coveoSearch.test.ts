@@ -99,7 +99,7 @@ test("a second token rejection is reported instead of retried forever", async ()
   // may be requested.
   await assert.rejects(
     searchNotes(session, config, "hana", 10),
-    /HTTP 403.*DOM fallback must not run/,
+    /HTTP 403.*DOM fallback: Operation failed/,
   );
   assert.equal(calls.token, 2);
   assert.equal(calls.search, 2);

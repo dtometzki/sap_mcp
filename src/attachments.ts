@@ -1,3 +1,5 @@
+import { PublicError } from "./errors.js";
+import { rejectApiRedirect } from "./api.js";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, open, rename, rm, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
@@ -77,7 +79,7 @@ export async function fetchAllowedAttachment(
 
   for (let redirectCount = 0; ; redirectCount += 1) {
     if (!isAllowedAttachmentHost(currentUrl)) {
-      throw new Error(`Refusing to download from non-SAP host: ${currentUrl}`);
+      throw new PublicError("Refusing to download from non-SAP host.");
     }
 
     const cookie = await cookieHeader(currentUrl);
@@ -93,18 +95,18 @@ export async function fetchAllowedAttachment(
     if (!REDIRECT_STATUSES.has(response.status)) {
       if (!isAllowedAttachmentHost(response.url || currentUrl)) {
         await response.body?.cancel().catch(() => undefined);
-        throw new Error(`Refusing response from non-SAP host: ${response.url}`);
+        throw new PublicError("Refusing response from non-SAP host.");
       }
       return response;
     }
 
     await response.body?.cancel().catch(() => undefined);
     if (redirectCount >= MAX_ATTACHMENT_REDIRECTS) {
-      throw new Error(`Attachment download exceeded ${MAX_ATTACHMENT_REDIRECTS} redirects.`);
+      throw new PublicError(`Attachment download exceeded ${MAX_ATTACHMENT_REDIRECTS} redirects.`);
     }
     const location = response.headers.get("location");
     if (!location) {
-      throw new Error(`Attachment redirect HTTP ${response.status} has no Location header.`);
+      throw new PublicError(`Attachment redirect HTTP ${response.status} has no Location header.`);
     }
     currentUrl = new URL(location, currentUrl).toString();
   }
@@ -154,7 +156,7 @@ async function writeAll(handle: FileHandle, chunk: Uint8Array): Promise<void> {
   let offset = 0;
   while (offset < chunk.byteLength) {
     const { bytesWritten } = await handle.write(chunk, offset, chunk.byteLength - offset);
-    if (bytesWritten <= 0) throw new Error("Attachment write made no progress.");
+    if (bytesWritten <= 0) throw new PublicError("Attachment write made no progress.");
     offset += bytesWritten;
   }
 }
@@ -162,7 +164,7 @@ async function writeAll(handle: FileHandle, chunk: Uint8Array): Promise<void> {
 /** Rejects when the signal aborts; never rejects unobserved (the catch marks it handled). */
 function abortPromise(signal: AbortSignal): Promise<never> {
   const promise = new Promise<never>((_resolve, reject) => {
-    const fail = (): void => reject(new Error("Download aborted", { cause: signal.reason }));
+    const fail = (): void => reject(new PublicError("Download aborted", { cause: signal.reason }));
     if (signal.aborted) fail();
     else signal.addEventListener("abort", fail, { once: true });
   });
@@ -185,9 +187,9 @@ export async function writeResponseWithLimit(
   const declaredLength = Number(response.headers.get("content-length"));
   if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
     await response.body?.cancel().catch(() => undefined);
-    throw new Error(`Attachment is ${declaredLength} bytes — exceeds the ${maxBytes}-byte limit.`);
+    throw new PublicError(`Attachment is ${declaredLength} bytes — exceeds the ${maxBytes}-byte limit.`);
   }
-  if (!response.body) throw new Error("Attachment response has no body.");
+  if (!response.body) throw new PublicError("Attachment response has no body.");
 
   const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   const handle = await open(temporary, "wx", 0o600);
@@ -204,7 +206,7 @@ export async function writeResponseWithLimit(
       bytes += value.byteLength;
       if (bytes > maxBytes) {
         await reader.cancel().catch(() => undefined);
-        throw new Error(`Attachment exceeds the ${maxBytes}-byte limit.`);
+        throw new PublicError(`Attachment exceeds the ${maxBytes}-byte limit.`);
       }
       await writeAll(handle, value);
     }
@@ -342,14 +344,19 @@ async function fetchAttachmentsViaApi(
     assertAllowedApiUrl(url, "Note detail request");
     const response = await session
       .request()
-      .get(url, { headers: { accept: "application/json" }, timeout: config.apiTimeoutMs });
+      .get(url, {
+        headers: { accept: "application/json" },
+        timeout: config.apiTimeoutMs,
+        maxRedirects: 0,
+      });
     try {
+      rejectApiRedirect(response);
       if (response.url() && !isAllowedApiUrl(response.url())) {
-        throw new Error(`Refusing note detail response from non-SAP host: ${response.url()}`);
+        throw new PublicError("Refusing note detail response from non-SAP host.");
       }
       assertNotLoggedOut(response.status(), response.url(), `Note ${id}`, response.ok());
       if (!response.ok()) {
-        throw new Error(`Note detail request failed: HTTP ${response.status()}`);
+        throw new PublicError(`Note detail request failed: HTTP ${response.status()}`);
       }
       let payload: unknown;
       try {
@@ -360,7 +367,7 @@ async function fetchAttachmentsViaApi(
         if (/text\/html/i.test(contentType) || looksLikeLoginPage(response.url())) {
           throw new SessionExpiredError();
         }
-        throw new Error("Note detail endpoint returned invalid JSON.");
+        throw new PublicError("Note detail endpoint returned invalid JSON.");
       }
       return extractAttachments(payload, url);
     } finally {
@@ -448,7 +455,7 @@ export async function fetchAttachmentList(
       if (fallbackError instanceof SessionExpiredError || fallbackError instanceof AccessDeniedError) {
         throw fallbackError;
       }
-      throw new Error(
+      throw new PublicError(
         `Attachment list for note ${id} failed: ${errorMessage(error)} ` +
           `(DOM fallback: ${errorMessage(fallbackError)})`,
         { cause: error },
@@ -457,7 +464,7 @@ export async function fetchAttachmentList(
     // Same reasoning as searchNotes: an empty scrape after a failed API call is a broken
     // backend, not a note without attachments — do not report it as "no attachments".
     if (attachments.length === 0) {
-      throw new Error(
+      throw new PublicError(
         `Attachment list for note ${id} failed: ${errorMessage(error)} ` +
           `(the DOM fallback found nothing either)`,
         { cause: error },
@@ -497,7 +504,7 @@ export function selectAttachment(
   fileName: string | undefined,
 ): NoteAttachment {
   if (attachments.length === 0) {
-    throw new Error(
+    throw new PublicError(
       `Note ${id} lists no attachments. If the note shows "A new version is in preparation", ` +
         `the portal hides attachments until the new version is released (see KBA 3453681).`,
     );
@@ -506,7 +513,7 @@ export function selectAttachment(
   if (!wanted) {
     const single = attachments[0];
     if (attachments.length === 1 && single) return single;
-    throw new Error(
+    throw new PublicError(
       `Note ${id} has ${attachments.length} attachments; pass fileName to pick one. ` +
         `Available: ${describeAvailable(attachments)}`,
     );
@@ -517,7 +524,7 @@ export function selectAttachment(
     attachment.fileName.toLowerCase().includes(wanted),
   );
   if (partial.length === 1 && partial[0]) return partial[0];
-  throw new Error(
+  throw new PublicError(
     partial.length === 0
       ? `Note ${id} has no attachment matching "${fileName}". Available: ${describeAvailable(attachments)}`
       : `"${fileName}" matches ${partial.length} attachments of note ${id}; be more specific. ` +
@@ -534,7 +541,7 @@ export async function downloadAttachment(
   const attachments = await fetchAttachmentList(session, config, id);
   const attachment = selectAttachment(attachments, id, fileName);
   if (!isAllowedAttachmentHost(attachment.url)) {
-    throw new Error(`Refusing to download from non-SAP host: ${attachment.url}`);
+    throw new PublicError("Refusing to download from non-SAP host.");
   }
 
   return withRetry(async () => {
@@ -545,7 +552,7 @@ export async function downloadAttachment(
     } catch (error) {
       if (watchdog.signal.aborted) {
         // "ETIMEDOUT" keeps the error transient for withRetry.
-        throw new Error(
+        throw new PublicError(
           `Attachment download ETIMEDOUT: no data received for ${config.apiTimeoutMs} ms.`,
           { cause: error },
         );
@@ -617,9 +624,9 @@ export function assertUsableAttachmentResponse(
   const isHtml = /text\/html/i.test(contentType);
   if (isHtml && looksLikeLoginPage(url)) throw new SessionExpiredError();
   assertNotLoggedOut(status, url, "Attachment download", ok);
-  if (!ok) throw new Error(`Attachment download failed: HTTP ${status}`);
+  if (!ok) throw new PublicError(`Attachment download failed: HTTP ${status}`);
   if (isHtml && !/\.html?$/i.test(fileName)) {
-    throw new Error(
+    throw new PublicError(
       "Portal returned an HTML page instead of the requested attachment — the session may " +
         "lack permission for this download, or the attachment URL scheme changed.",
     );

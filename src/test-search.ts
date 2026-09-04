@@ -1,3 +1,4 @@
+import { safeErrorMessage } from "./errors.js";
 import { loadConfig } from "./config.js";
 import { loadDotEnv, scrubCredentialsFromEnv } from "./env.js";
 import { SapSession } from "./session.js";
@@ -26,6 +27,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  console.error("Test failed:", error instanceof Error ? error.message : error);
+  console.error("Test failed:", safeErrorMessage(error));
   process.exitCode = 1;
 });

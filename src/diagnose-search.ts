@@ -1,3 +1,4 @@
+import { safeErrorMessage } from "./errors.js";
 import { chmod, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
@@ -193,6 +194,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  console.error("Diagnostic failed:", error instanceof Error ? error.message : error);
+  console.error("Diagnostic failed:", safeErrorMessage(error));
   process.exitCode = 1;
 });

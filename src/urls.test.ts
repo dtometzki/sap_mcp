@@ -11,7 +11,25 @@ import {
   redactUrlForLog,
 } from "./urls.js";
 
-test("page and login URLs allow the SAP portal and identity hosts", () => {
+test("credentials are restricted to exact HTTPS identity-provider origins", () => {
+  for (const url of ["https://accounts.sap.com/login", "https://accounts.sap.cn/login", "https://accounts.sap.com:443/login"]) {
+    assert.equal(isAllowedLoginUrl(url), true, url);
+  }
+  for (const url of [
+    "https://me.sap.com/login",
+    "https://campaign.sap.com/login",
+    "https://sap.cn/login",
+    "https://eu.accounts.sap.com/login",
+    "https://accounts.sap.com:8443/login",
+    "https://accounts.sap.com.evil.example/login",
+    "https://user:secret@accounts.sap.com/login",
+    "http://accounts.sap.com/login",
+  ]) {
+    assert.equal(isAllowedLoginUrl(url), false, url);
+  }
+});
+
+test("page URLs allow the SAP portal and identity hosts", () => {
   for (const url of [
     "https://me.sap.com/notes/2170696",
     "https://accounts.sap.com/saml2/idp/sso",
@@ -20,7 +38,6 @@ test("page and login URLs allow the SAP portal and identity hosts", () => {
     "https://launchpad.support.sap.com/#/notes/1",
   ]) {
     assert.equal(isAllowedPageUrl(url), true, url);
-    assert.equal(isAllowedLoginUrl(url), true, url);
   }
 });
 
@@ -83,9 +100,9 @@ test("redactUrlForLog strips query, hash and userinfo", () => {
   assert.equal(redactUrlForLog("https://me.sap.com/notes/1"), "https://me.sap.com/notes/1");
 });
 
-test("assert helpers name the rejected URL", () => {
-  assert.throws(() => assertAllowedPageUrl("https://evil.example/x"), /evil\.example/);
-  assert.throws(() => assertAllowedApiUrl("file:///etc/passwd"), /file:/);
+test("assert helpers withhold rejected URLs and their credentials", () => {
+  assert.throws(() => assertAllowedPageUrl("https://evil.example/x"), /Refusing navigation/);
+  assert.throws(() => assertAllowedApiUrl("file:///etc/passwd"), /Refusing API request/);
   assert.doesNotThrow(() => assertAllowedPageUrl("https://me.sap.com/notes/1"));
   assert.doesNotThrow(() =>
     assertAllowedApiUrl("https://example.org.coveo.com/rest/search/v2"),

@@ -1,3 +1,4 @@
+import { safeErrorMessage } from "./errors.js";
 import { AccessDeniedError, SessionExpiredError } from "./session.js";
 
 /**
@@ -60,9 +61,9 @@ export interface ExecuteOptions {
 /** Both error types already carry a complete, actionable message; do not bury it behind a prefix. */
 function toErrorText(error: unknown): string {
   if (error instanceof SessionExpiredError || error instanceof AccessDeniedError) {
-    return error.message;
+    return safeErrorMessage(error);
   }
-  if (error instanceof Error) return `SAP portal request failed: ${error.message}`;
+  if (error instanceof Error) return `SAP portal request failed: ${safeErrorMessage(error)}`;
   return "SAP portal request failed with an unknown error.";
 }
 
@@ -185,7 +186,7 @@ export class ToolRunner {
         : Date.now() + (this.options.autoLoginCooldownMs ?? 5 * 60_000);
       // stderr only: stdout carries the MCP protocol.
       process.stderr.write(
-        `[sap-notes] automatic login failed: ${error instanceof Error ? error.message : String(error)}\n`,
+        `[sap-notes] automatic login failed: ${safeErrorMessage(error)}\n`,
       );
       return false;
     }
