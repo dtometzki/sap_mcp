@@ -1,6 +1,6 @@
 {
   "name": "sap-notes-mcp",
-  "version": "1.6.2",
+  "version": "1.7.0",
   "private": true,
   "description": "MCP server for searching and fetching SAP Notes / KBAs from the protected SAP support area",
   "type": "module",
@@ -14,15 +14,18 @@
     "test": "npm run build && node --test dist/*.test.js",
     "login": "npm run build && node dist/login.js",
     "start": "node dist/server.js",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "web": "npm run build && node dist/web/main.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
+    "markdown-it": "^15.0.1",
     "playwright": "^1.49.0",
     "turndown": "^7.2.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/markdown-it": "^14.2.0",
     "@types/node": "^22.0.0",
     "@types/turndown": "^5.0.5",
     "eslint": "^10.7.0",

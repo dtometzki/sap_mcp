@@ -7,6 +7,22 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.7.0] – 2026-09-04
+
+### Hinzugefügt
+- Lokale deutsche SAP-Notes-Web-App (`npm run web`) mit Suche, Note-Ansicht,
+  verschlüsselter Zugangsdatenverwaltung und filterbarem, löschbarem Suchverlauf.
+- Master-Passwort-Tresor für Zugangsdaten, SAP-Session und Verlauf mit AES-256-GCM,
+  scrypt und atomarer Speicherung; getrennt von bestehenden MCP-Dateien.
+- Automatischer SAP-Login und sichtbarer MFA-Login aus der App; manuelles Sperren,
+  Passwortwechsel, Loopback-Zugriffsschutz und begrenzte Entsperrversuche.
+- Optionale WebMCP-Aktionen für Suche und Note-Ansicht, sowie Offline-Tests für
+  Verschlüsselung, HTTP-Sicherheit, Session-Isolation und den Browser-Ablauf.
+
+### Geändert
+- Gemeinsame SAP-Session unterstützt austauschbare Speicherung; ToolRunner bietet
+  typisierte Ergebnisse für den HTTP-Transport bei unverändertem MCP-Verhalten.
+
 ## [1.6.2] – 2026-09-04
 
 ### Behoben

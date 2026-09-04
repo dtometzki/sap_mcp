@@ -101,6 +101,94 @@ automatisieren; ein MFA-pflichtiger S-User braucht weiterhin den interaktiven Lo
 Ohne `SAPPASSWORD` verhält sich alles exakt wie bisher (`SAPUSER` bzw. das ältere
 `SAP_USERNAME` dient dann nur dem Vorbefüllen des Benutzerfelds).
 
+## Lokale Web-App
+
+Die Web-App ergänzt den MCP um eine deutsche Oberfläche für Suche, vollständige
+Note-Ansicht, verschlüsselte SAP-Zugangsdaten und einen durchsuchbaren Suchverlauf.
+Sie läuft für **eine Person mit einem SAP-Konto auf demselben Rechner**.
+
+```bash
+npm install
+npx playwright install chromium
+npm run web
+# http://127.0.0.1:3210 im Browser öffnen
+```
+
+1. Beim ersten Aufruf ein **Master-Passwort mit mindestens 12 Zeichen** festlegen.
+2. Unter **Einstellungen** SAP-Benutzer und SAP-Passwort verschlüsselt speichern.
+3. Die App prüft die Session und meldet sich automatisch an. Bei MFA auf
+   **SAP-Anmeldung abschließen** klicken, im sichtbaren SAP-Browserfenster anmelden
+   und anschließend in der App **Anmeldung prüfen** wählen. Abbrechen oder fünf
+   Minuten Zeitüberschreitung schließen das Anmeldefenster.
+4. Nach Fehlermeldung, Produkt oder Problem suchen (2–500 Zeichen; 1–25 Treffer,
+   Standard 10), oder eine Note direkt über ihre 4–10-stellige Nummer öffnen.
+5. Im **Suchverlauf** erfolgreiche Suchen einschließlich null Treffern erneut
+   ausführen, filtern oder löschen. Gespeichert werden Suchtext, Zeitpunkt,
+   Trefferlimit und Trefferzahl. Fehler und direkt geöffnete Notes erscheinen
+   nicht im Suchverlauf; vollständige Note-Inhalte werden nicht dauerhaft gespeichert.
+
+**Sperren** beendet die SAP-Browser, verwirft entschlüsselte Daten und meldet alle
+App-Browser-Sitzungen ab. Nach einem Serverneustart ist der Tresor ebenfalls gesperrt.
+Das Schließen eines Tabs sperrt den Server nicht; es gibt keine Inaktivitätssperre.
+Weitere Browser benötigen das Master-Passwort zum Entsperren ihrer eigenen Sitzung.
+Ändern des Master-Passworts meldet die anderen Browser-Sitzungen ab.
+
+### Web-Konfiguration und Speicherung
+
+| Variable | Default | Zweck |
+|---|---|---|
+| `SAP_WEB_PORT` | `3210` | Lokaler HTTP-Port, 1–65535 |
+| `SAP_WEB_DATA_DIR` | `~/.sap-notes-web` | Datenverzeichnis mit `vault.enc` und Prozess-Sperrdatei `server.lock` |
+
+Nur die exakte Adresse `http://127.0.0.1:<Port>` wird akzeptiert, kein Netzwerkzugriff,
+kein Reverse-Proxy und kein öffentliches Hosting. Das lokale HTTP-Cookie hat
+`HttpOnly` und `SameSite=Strict`; Host-/Origin-Prüfung, JSON-Anfragen und eine
+restriktive Content Security Policy schützen die lokale Oberfläche. Es gibt keine
+CORS-Freigabe. Maximal fünf Entsperr-/Passwortprüfungen pro Minute sind erlaubt.
+
+Der Tresor verschlüsselt **SAP-Zugangsdaten, Cookies/localStorage und Suchverlauf**
+mit AES-256-GCM. Aus dem Master-Passwort wird mit scrypt (`N=131072`, `r=8`, `p=1`)
+ein Schlüssel abgeleitet. Jeder Schreibvorgang verwendet eine neue 12-Byte-Nonce und
+einen 16-Byte-Authentifizierungstag. Die Datei wird atomar mit Rechten `0600` ersetzt;
+das Datenverzeichnis erhält `0700`. Der Schlüssel bleibt nur während der Entsperrung
+im Arbeitsspeicher. Entschlüsselte Session-Dateien werden nicht angelegt.
+
+Die Web-App verwendet die bestehenden SAP-Endpunkte, Timeouts und Origin-Prüfungen,
+aber **importiert keine Zugangsdaten aus `.env`/Umgebungsvariablen und keine
+MCP-Session-Datei**. Ihr automatischer Login wird durch die im Tresor gespeicherten
+Zugangsdaten aktiviert. `SAP_AUTO_LOGIN` ist eine Einstellung des MCP; die Web-App
+verwaltet ihren Zugang unabhängig davon. Ein Kontowechsel oder das Löschen der
+Zugangsdaten entfernt die Web-SAP-Session. MCP und Login-CLI funktionieren wie bisher.
+
+HTML aus Notes wird als Text behandelt, externe Bilder werden nicht geladen und
+Links auf sichere Protokolle begrenzt. Anhänge sind weiterhin über den MCP verfügbar;
+die Web-App unterstützt in dieser Version keine Anhang-Downloads.
+
+Browser mit WebMCP-Unterstützung können die sichtbaren Aktionen
+`search_sap_notes` und `open_sap_note` nutzen. Diese benötigen dieselbe entsperrte
+App-Sitzung und dieselben Prüfungen wie die Oberfläche. Es gibt keine Werkzeuge für
+Passwörter oder das Entsperren. Ohne WebMCP funktioniert die Oberfläche vollständig.
+
+### Master-Passwort vergessen / Sicherung
+
+Es gibt **keine Passwortwiederherstellung**. Für eine Sicherung die App beenden und
+`vault.enc` aus dem Datenverzeichnis kopieren; zum Wiederherstellen sind die Datei
+und das zugehörige Master-Passwort nötig. Bestehende Daten nicht überschreiben.
+
+Für einen neuen, leeren Tresor die App beenden und `vault.enc` umbenennen oder
+bewusst löschen. Beim nächsten Start kann ein neuer Tresor angelegt werden. Ohne
+das alte Passwort sind die bisherigen Zugangsdaten und der Suchverlauf nicht mehr
+zugänglich. Eine verwaiste `server.lock` nach einem Absturz wird automatisch erkannt;
+eine beschädigte Sperrdatei erst entfernen, nachdem alle Web-App-Prozesse beendet sind.
+
+### Web-Tests
+
+`npm run build`, `npm run lint` und `npm test` prüfen auch Verschlüsselung,
+HTTP-Zugriffsschutz, Session-Isolation, Suchverlauf, Sperr-Rennen und die
+Browser-Bedienung gegen lokale SAP-Fixtures. Der WebMCP-Vertrag wird mit einer
+Test-Registry geprüft; das ersetzt keine Prüfung einer nativen Browser-Implementierung.
+Die Tests verwenden keine echten SAP-Zugangsdaten und senden keine SAP-Anfragen.
+
 ## Einbindung in Claude Desktop / Claude Code
 
 `claude_desktop_config.json` bzw. `.mcp.json`:

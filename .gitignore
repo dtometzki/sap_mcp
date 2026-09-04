@@ -19,3 +19,9 @@ session.json
 
 # Stale git lock artifacts
 _to_delete/
+
+# Local web-app vault and process lock
+.sap-notes-web/
+vault.enc
+vault.enc.*.tmp
+server.lock
