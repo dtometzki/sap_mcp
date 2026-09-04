@@ -1,5 +1,5 @@
 import { loadConfig } from "./config.js";
-import { scrubCredentialsFromEnv } from "./env.js";
+import { loadDotEnv, scrubCredentialsFromEnv } from "./env.js";
 import { SapSession } from "./session.js";
 import { searchNotes } from "./notes.js";
 
@@ -10,6 +10,7 @@ import { searchNotes } from "./notes.js";
  */
 async function main(): Promise<void> {
   const query = process.argv.slice(2).join(" ").trim() || "HANA Revision";
+  loadDotEnv();
   const config = loadConfig();
   scrubCredentialsFromEnv(); // diagnostics never log in; keep credentials away from Chromium
   const session = new SapSession(config, true); // headless, uses session.json

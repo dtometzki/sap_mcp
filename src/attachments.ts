@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, open, rename, rm } from "node:fs/promises";
+import { chmod, mkdir, open, rename, rm, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
 import { buildUrl, type Config } from "./config.js";
 import {
@@ -15,7 +15,7 @@ import {
   looksLikeLoginPage,
   type SapSession,
 } from "./session.js";
-import { coerceField, errorMessage, withRetry } from "./notes.js";
+import { coerceField, errorMessage, withRetry, wrapUntrustedPortalContent } from "./notes.js";
 
 export interface NoteAttachment {
   fileName: string;
@@ -31,6 +31,18 @@ export interface AttachmentDownload {
   /** UTF-8 content, only set for text-like attachments (capped at INLINE_TEXT_LIMIT chars). */
   text?: string;
   textTruncated?: boolean;
+}
+
+/** Client-facing result; the original portal file name stays inside a fixed untrusted block. */
+export function formatAttachmentDownload(download: AttachmentDownload): string {
+  const type = download.contentType ? `, ${download.contentType}` : "";
+  const header = `Saved: ${download.filePath} (${download.bytes} bytes${type})`;
+  const truncated = download.textTruncated
+    ? `\n\n[Output truncated — the complete file is on disk at ${download.filePath}]`
+    : "";
+  const text = download.text === undefined ? "" : `\n\n${download.text}${truncated}`;
+  const body = `${header}\nFile name: ${download.attachment.fileName}${text}`;
+  return wrapUntrustedPortalContent("attachment download", body);
 }
 
 /** Cap for inline text returned to the MCP client; the full file is always on disk. */
@@ -137,6 +149,16 @@ export function inactivityWatchdog(timeoutMs: number): DownloadWatchdog {
   };
 }
 
+/** Writes the complete chunk even when the operating system accepts only part of it. */
+async function writeAll(handle: FileHandle, chunk: Uint8Array): Promise<void> {
+  let offset = 0;
+  while (offset < chunk.byteLength) {
+    const { bytesWritten } = await handle.write(chunk, offset, chunk.byteLength - offset);
+    if (bytesWritten <= 0) throw new Error("Attachment write made no progress.");
+    offset += bytesWritten;
+  }
+}
+
 /** Rejects when the signal aborts; never rejects unobserved (the catch marks it handled). */
 function abortPromise(signal: AbortSignal): Promise<never> {
   const promise = new Promise<never>((_resolve, reject) => {
@@ -184,7 +206,7 @@ export async function writeResponseWithLimit(
         await reader.cancel().catch(() => undefined);
         throw new Error(`Attachment exceeds the ${maxBytes}-byte limit.`);
       }
-      await handle.write(value);
+      await writeAll(handle, value);
     }
     await handle.close();
     await rename(temporary, filePath);
@@ -462,7 +484,10 @@ export function formatAttachmentList(number: string, attachments: NoteAttachment
 }
 
 function describeAvailable(attachments: NoteAttachment[]): string {
-  return attachments.map((attachment) => attachment.fileName).join(", ");
+  return wrapUntrustedPortalContent(
+    "attachment names",
+    attachments.map((attachment) => attachment.fileName).join("\n"),
+  );
 }
 
 /** Case-insensitive exact match first, then unique substring match. */
@@ -550,24 +575,14 @@ async function transferAttachment(
   watchdog.touch();
 
   try {
-    assertNotLoggedOut(
+    const contentType = response.headers.get("content-type") ?? "";
+    assertUsableAttachmentResponse(
       response.status,
       response.url,
-      `"${attachment.fileName}"`,
       response.ok,
+      contentType,
+      attachment.fileName,
     );
-    if (!response.ok) {
-      throw new Error(`Attachment download failed: HTTP ${response.status}`);
-    }
-    const contentType = response.headers.get("content-type") ?? "";
-
-    // A login or error page served instead of the file must not end up on disk.
-    if (/text\/html/i.test(contentType) && !/\.html?$/i.test(attachment.fileName)) {
-      throw new Error(
-        `Portal returned an HTML page instead of "${attachment.fileName}" — the session ` +
-          `may lack permission for this download, or the attachment URL scheme changed.`,
-      );
-    }
 
     const directory = join(config.attachmentDirPath, id);
     await ensurePrivateDirectory(directory);
@@ -588,5 +603,25 @@ async function transferAttachment(
     return result;
   } finally {
     await response.body?.cancel().catch(() => undefined);
+  }
+}
+
+/** Rejects login/error pages before they can be persisted as an attachment. */
+export function assertUsableAttachmentResponse(
+  status: number,
+  url: string,
+  ok: boolean,
+  contentType: string,
+  fileName: string,
+): void {
+  const isHtml = /text\/html/i.test(contentType);
+  if (isHtml && looksLikeLoginPage(url)) throw new SessionExpiredError();
+  assertNotLoggedOut(status, url, "Attachment download", ok);
+  if (!ok) throw new Error(`Attachment download failed: HTTP ${status}`);
+  if (isHtml && !/\.html?$/i.test(fileName)) {
+    throw new Error(
+      "Portal returned an HTML page instead of the requested attachment — the session may " +
+        "lack permission for this download, or the attachment URL scheme changed.",
+    );
   }
 }

@@ -31,7 +31,7 @@ npm start              # optionaler Smoke-Test (stdio, wartet auf MCP-Client)
 
 ### ENV-Variablen laden
 
-Server und Login-CLI lesen beim Start selbst eine `.env`-Datei ein — kein
+Server, Login-CLI und Diagnose-Skripte lesen beim Start selbst eine `.env`-Datei ein — kein
 `--env-file`-Flag und kein `dotenv`-Dependency nötig:
 
 ```bash
@@ -172,6 +172,9 @@ Antwort des Portals.
 | `SAP_LOGIN_SUBMIT_SELECTOR` | `#logOnFormSubmit, …` | Selektor des Submit-Buttons |
 | `SAP_LOGIN_MFA_SELECTOR` | `input[autocomplete='one-time-code'], …` | Erkennung der MFA-Abfrage (bricht den Auto-Login ab) |
 
+Alle Millisekunden-Werte müssen im von Node unterstützten Timer-Bereich von `0` bzw. `1`
+bis `2147483647` liegen; `0` ist nur bei den ausdrücklich abschaltbaren Optionen erlaubt.
+
 ## Wenn SAP das Portal umbaut
 
 Der Server benutzt bewusst **keine** hartkodierten CSS-Klassen:
@@ -210,8 +213,10 @@ node dist/diagnose-search.js "HANA Revision"   # interaktiv
 ```
 
 Das Diagnose-Skript entfernt Zugangstoken und Cookie-Header vor dem Schreiben und legt
-`diagnose-coveo.json` mit Dateimodus `0600` ab. Der Mitschnitt kann dennoch geschützte
-SAP-Suchergebnisse enthalten und sollte nicht weitergegeben oder committed werden.
+`diagnose-coveo.json` mit Dateimodus `0600` ab. Es behält höchstens 200 XHR-Antworten,
+512.000 Zeichen pro Antwort und insgesamt 5.000.000 Antwortzeichen im Speicher. Der
+Mitschnitt kann dennoch geschützte SAP-Suchergebnisse enthalten und sollte nicht
+weitergegeben oder committed werden.
 
 Lint (typescript-eslint, type-aware) und die Offline-Tests laufen zusätzlich in der CI
 (`.github/workflows/ci-workflow.yml`) bei jedem Push/PR — ohne SAP-Session und ohne Browser.
