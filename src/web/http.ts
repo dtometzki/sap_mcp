@@ -7,9 +7,12 @@ import { credentialsSchema, masterSchema, WebError, locked } from "./vault.js";
 import { type WebService } from "./sap.js";
 import { renderNote } from "./markdown.js";
 import { loadAppInfo } from "./about.js";
+import { sanitizeFileName } from "../attachments.js";
 
 const searchSchema = z.object({ query: z.string().trim().min(2).max(500), limit: z.number().int().min(1).max(25).default(10) }).strict();
 const numberSchema = z.string().regex(/^\d{4,10}$/);
+const attachmentListSchema = z.object({ number: numberSchema }).strict();
+const attachmentDownloadSchema = attachmentListSchema.extend({ fileName: z.string().min(1).max(1024) }).strict();
 const authSchema = z.object({ password: masterSchema }).strict();
 const passwordSchema = z.object({ current: masterSchema, next: masterSchema }).strict();
 const MAX_BODY = 16 * 1024;
@@ -70,6 +73,7 @@ export function createWebServer(service: WebService, options: WebServerOptions =
   // Observe an early read failure even if the About endpoint is never requested.
   void appInfo.catch(() => undefined);
   const sessions = new Set<string>();
+  const downloads = new Map<ServerResponse, AbortController>();
   let generation = 0;
   let authBusy = false;
   let locking = false;
@@ -81,6 +85,10 @@ export function createWebServer(service: WebService, options: WebServerOptions =
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = undefined;
     generation++; sessions.clear(); locking = true;
+    for (const [response, controller] of downloads) {
+      controller.abort();
+      if (response.headersSent) response.destroy();
+    }
     try { await service.lock(); } finally { locking = false; }
   }
   function touchIdle(): void {
@@ -176,7 +184,26 @@ export function createWebServer(service: WebService, options: WebServerOptions =
         json(response, 200, { unlocked: false }); return;
       }
       let result: unknown;
-      if (path === "/api/search" && method === "POST") {
+      if (path === "/api/attachments/list" && method === "POST") {
+        const { number } = attachmentListSchema.parse(await authorizedBody());
+        result = { attachments: await service.attachments(number) };
+      } else if (path === "/api/attachments/download" && method === "POST") {
+        const { number, fileName } = attachmentDownloadSchema.parse(await authorizedBody());
+        const controller = new AbortController();
+        downloads.set(response, controller);
+        const cleanup = (): void => { downloads.delete(response); response.removeListener("close", cancel); response.removeListener("finish", cleanup); };
+        const cancel = (): void => { controller.abort(); cleanup(); };
+        response.once("close", cancel);
+        response.once("finish", cleanup);
+        try {
+          const download = await service.download(number, fileName, controller.signal);
+          if (generation !== started || !hasSession() || controller.signal.aborted) { download.data.fill(0); throw locked(); }
+          const encoded = encodeURIComponent(sanitizeFileName(download.fileName)).replace(/['()*]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+          response.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename*=UTF-8''${encoded}`, "Content-Length": download.data.length });
+          response.end(download.data, () => download.data.fill(0));
+          return;
+        } finally { if (!response.headersSent) cleanup(); }
+      } else if (path === "/api/search" && method === "POST") {
         const input = searchSchema.parse(await authorizedBody());
         result = { hits: await service.search(input.query, input.limit) };
       } else if (path.startsWith("/api/notes/") && method === "GET") {

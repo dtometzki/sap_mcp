@@ -88,7 +88,9 @@ class FakeSap implements SapGateway {
     if (this.failure) throw this.failure;
     return query === "zero" ? [] : [{ id: "2170696", title: "HANA <script>alert(1)</script>", url: "https://me.sap.com/notes/2170696" }];
   }
-  async note(number: string) { if (this.failure) throw this.failure; return { id: number, title: "HANA troubleshooting", url: `https://me.sap.com/notes/${number}`, markdown: "# Symptom\n\nA **bold** solution.\n\n<script>alert(1)</script>\n\n![track](https://example.com/pixel)\n\n[unsafe](javascript:alert(1))" }; }
+  async note(number: string) { if (this.failure) throw this.failure; return { id: number, title: "HANA troubleshooting", url: `https://me.sap.com/notes/${number}`, markdown: "# Symptom\n\nA **bold** solution.\n\n<script>alert(1)</script>\n\n![track](https://example.com/pixel)\n\n[unsafe](javascript:alert(1))\n\n### Attachments\n\n| File Name | File Size |\n| --- | --- |\n| SQLStatements.zip | 4 KB |\n| Anleitung.pdf | 8 KB |" }; }
+  async attachments() { if (this.failure) throw this.failure; return [{ fileName: "SQLStatements.zip", sizeBytes: 4 }, { fileName: "Anleitung.pdf", sizeBytes: 8 }]; }
+  async download(_number: string, fileName: string, signal: AbortSignal) { await this.waitForSearch; signal.throwIfAborted(); if (this.failure) throw this.failure; return { fileName, data: Buffer.from(fileName.endsWith(".pdf") ? "%PDF-1.7" : "PK\x03\x04") }; }
   async interactiveStart() { this.status = "interactive"; }
   async interactiveFinish() { this.status = "authenticated"; await this.store.save(storage); }
   async interactiveCancel() { this.status = "login_required"; }
@@ -293,6 +295,23 @@ test("browser acceptance flow and WebMCP contracts use the same visible applicat
     await page.locator(".result").click(); await page.getByRole("heading", { name: "HANA troubleshooting" }).waitFor();
     assert.equal(await page.locator(".note-body strong").textContent(), "bold");
     assert.equal(await page.locator(".note-body img, .note-body script").count(), 0);
+    // Reproduce note 1969700: the portal's plain attachment-table names must download directly.
+    const inlineEvent = page.waitForEvent("download");
+    await page.locator(".note-body").getByRole("button", { name: "SQLStatements.zip herunterladen", exact: true }).click();
+    const inlineDownload = await inlineEvent;
+    assert.equal(inlineDownload.suggestedFilename(), "SQLStatements.zip");
+    const inlinePath = await inlineDownload.path(); assert.ok(inlinePath);
+    assert.equal((await readFile(inlinePath)).toString(), "PK\x03\x04");
+    await page.waitForFunction(() => document.getElementById("message")?.textContent?.includes("Speicherdialog"));
+    await page.getByRole("button", { name: "Anhänge anzeigen", exact: true }).click();
+    for (const fileName of ["SQLStatements.zip", "Anleitung.pdf"]) {
+      const event = page.waitForEvent("download");
+      await page.locator(".attachments").getByRole("button", { name: `${fileName} herunterladen`, exact: true }).click();
+      const download = await event;
+      assert.equal(download.suggestedFilename(), fileName);
+      const path = await download.path(); assert.ok(path);
+      assert.equal((await readFile(path)).toString(), fileName.endsWith(".pdf") ? "%PDF-1.7" : "PK\x03\x04");
+    }
     await page.getByRole("button", { name: "Suchverlauf", exact: true }).click(); await page.locator(".history-query").waitFor();
     await page.locator(".history-query").click(); await page.locator(".result").waitFor();
     const result = await page.evaluate(async () => {
@@ -486,4 +505,55 @@ test("desktop workspace fits the viewport and long notes reflow without horizont
       assert.ok(dimensions.content <= dimensions.viewport + 1, `mobile width ${width}: content ${dimensions.content}`);
     }
   } finally { await page.close(); await browser.close(); await f.cleanup(); }
+});
+
+
+test("web attachments enforce authorization, validation, safe binary delivery and lock races", async () => {
+  const f = await fixture();
+  const list = { number: "1969700" };
+  const download = { ...list, fileName: "SQLStatements.zip" };
+  try {
+    assert.equal((await f.request("/api/attachments/list", "POST", list)).status, 401);
+    assert.equal((await f.request("/api/attachments/download", "POST", download)).status, 401);
+    await f.request("/api/setup", "POST", { password: PASSWORD });
+    assert.equal((await f.request("/api/attachments/download", "POST", download, { Origin: "https://evil.example" })).status, 403);
+    assert.equal((await f.request("/api/attachments/download", "POST", download, { Origin: "" })).status, 403);
+    assert.equal((await f.request("/api/attachments/download", "POST", download, { "Content-Type": "text/plain" })).status, 415);
+    assert.equal((await f.request("/api/attachments/download", "POST", { ...download, url: "https://evil.example" })).status, 400);
+    assert.equal((await f.request("/api/attachments/list", "POST", { number: "../secret" })).status, 400);
+    const listing: unknown = await (await f.request("/api/attachments/list", "POST", list)).json();
+    assert.deepEqual(listing, { attachments: [{ fileName: "SQLStatements.zip", sizeBytes: 4 }, { fileName: "Anleitung.pdf", sizeBytes: 8 }] });
+    for (const fileName of ["SQLStatements.zip", "Anleitung.pdf", "../Übersicht\r\n.pdf"]) {
+      const response = await f.request("/api/attachments/download", "POST", { ...list, fileName });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("content-type"), "application/octet-stream");
+      assert.equal(response.headers.get("cache-control"), "no-store");
+      assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+      const disposition = response.headers.get("content-disposition") ?? "";
+      assert.match(disposition, /^attachment; filename\*=UTF-8''/);
+      assert.ok(!decodeURIComponent(disposition).includes("../"));
+      assert.ok(!decodeURIComponent(disposition).includes("\r\n"));
+      assert.equal((await response.arrayBuffer()).byteLength, fileName.endsWith(".pdf") ? 8 : 4);
+    }
+    assert.deepEqual(await readdir(f.directory), ["vault.enc"]);
+    assert.equal(f.vault.history.length, 0);
+    const gateway = f.gateways[0]; assert.ok(gateway);
+    gateway.failure = new AccessDeniedError("Denied");
+    const denied = await f.request("/api/attachments/download", "POST", download);
+    assert.equal(denied.status, 403); assert.equal((await denied.json() as { code: string }).code, "ACCESS_DENIED");
+    gateway.failure = new SessionExpiredError();
+    assert.equal((await f.request("/api/attachments/download", "POST", download)).status, 409);
+    gateway.failure = undefined;
+    let release!: () => void;
+    gateway.waitForSearch = new Promise<void>(resolve => { release = resolve; });
+    const pending = f.request("/api/attachments/download", "POST", download);
+    // Wait until the service queue has entered the download, then invalidate it.
+    await new Promise(resolve => setTimeout(resolve, 30));
+    const locking = f.request("/api/lock", "POST");
+    while (f.vault.unlocked) await new Promise(resolve => setTimeout(resolve, 5));
+    release();
+    const blocked = await pending;
+    assert.equal(blocked.status, 401); assert.equal((await blocked.json() as { code: string }).code, "LOCKED");
+    await locking;
+  } finally { await f.cleanup(); }
 });

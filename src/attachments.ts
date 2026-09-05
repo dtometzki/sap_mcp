@@ -264,7 +264,7 @@ const FILE_NAME_PATTERN = /\.[a-z0-9]{1,10}$/i;
 
 const FILE_NAME_KEYS = ["FileName", "Filename", "fileName", "filename", "Name", "name"];
 const URL_KEYS = ["URL", "Url", "url", "Uri", "uri", "DownloadUrl", "downloadUrl"];
-const SIZE_KEYS = ["FileSize", "Size", "fileSize", "size", "SizeInBytes"];
+const SIZE_KEYS = ["Size", "fileSize", "size"];
 
 /** The portal wraps most scalars as { value: ... }; unwrap one level, then coerce. */
 function readField(source: Record<string, unknown>, keys: readonly string[]): string {
@@ -305,8 +305,13 @@ export function extractAttachments(payload: unknown, baseUrl: string): NoteAttac
     if (!isAllowedAttachmentHost(url)) return;
     if (into.has(url)) return;
     const attachment: NoteAttachment = { fileName, url };
-    const size = Number.parseInt(readField(node, SIZE_KEYS), 10);
-    if (Number.isFinite(size) && size > 0) attachment.sizeBytes = size;
+    // SAP's note-detail FileSize is in KB (1024 bytes), as displayed in the portal.
+    // Explicit byte fields win; other API variants retain their byte semantics.
+    const bytes = readField(node, ["SizeInBytes", "sizeBytes"]);
+    const kilobytes = readField(node, ["FileSize"]);
+    const size = Number.parseFloat(bytes || kilobytes || readField(node, SIZE_KEYS));
+    const sizeBytes = Math.round(size * (!bytes && kilobytes ? 1024 : 1));
+    if (Number.isSafeInteger(sizeBytes) && sizeBytes > 0) attachment.sizeBytes = sizeBytes;
     into.set(url, attachment);
   };
 
@@ -555,6 +560,64 @@ export async function downloadAttachment(
       throw error;
     } finally {
       watchdog.clear();
+    }
+  });
+}
+
+/** Browser downloads stay in memory; the MCP's disk-based download remains unchanged. */
+export interface AttachmentBytes { fileName: string; data: Buffer }
+
+export async function readAttachmentBytes(response: Response, signal: AbortSignal, touch: () => void, maxBytes = MAX_DOWNLOAD_BYTES): Promise<Buffer> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new PublicError("Attachment response has no body.");
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  const cancel = (): void => { void reader.cancel().catch(() => undefined); };
+  signal.addEventListener("abort", cancel, { once: true });
+  try {
+    signal.throwIfAborted();
+    if (Number(response.headers.get("content-length")) > maxBytes) throw new PublicError("Attachment exceeds download size limit.");
+    for (;;) {
+      const { done, value } = await reader.read();
+      signal.throwIfAborted();
+      if (done) break;
+      touch(); bytes += value.byteLength;
+      if (bytes > maxBytes) throw new PublicError("Attachment exceeds download size limit.");
+      chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks, bytes);
+  } finally {
+    signal.removeEventListener("abort", cancel);
+    await reader.cancel().catch(() => undefined);
+    for (const chunk of chunks) chunk.fill(0);
+  }
+}
+
+export async function downloadAttachmentBytes(session: SapSession, config: Config, id: string, fileName: string, signal: AbortSignal): Promise<AttachmentBytes> {
+  const attachments = await fetchAttachmentList(session, config, id);
+  signal.throwIfAborted();
+  // Only exact names from this note are accepted; clients cannot supply download URLs.
+  const attachment = attachments.find(item => item.fileName === fileName);
+  if (!attachment) throw new PublicError("Attachment is no longer available. Refresh the attachment list.");
+  return withRetry(async () => {
+    signal.throwIfAborted();
+    const watchdog = inactivityWatchdog(config.apiTimeoutMs);
+    const combined = AbortSignal.any([signal, watchdog.signal]);
+    let response: Response | undefined;
+    try {
+      response = await fetchAllowedAttachment(attachment.url, url =>
+        isTrustedAttachmentCookieHost(url, config.attachmentCookieHosts) ? session.cookieHeader(url) : Promise.resolve(""), combined);
+      watchdog.touch();
+      assertUsableAttachmentResponse(response.status, response.url, response.ok, response.headers.get("content-type") ?? "", attachment.fileName);
+      const data = await readAttachmentBytes(response, combined, () => watchdog.touch());
+      return { fileName: sanitizeFileName(attachment.fileName), data };
+    } catch (error) {
+      signal.throwIfAborted();
+      if (watchdog.signal.aborted) throw new PublicError("Attachment download ETIMEDOUT", { cause: error });
+      throw error;
+    } finally {
+      watchdog.clear();
+      await response?.body?.cancel().catch(() => undefined);
     }
   });
 }
