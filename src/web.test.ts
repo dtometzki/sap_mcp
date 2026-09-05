@@ -8,7 +8,7 @@ import { chromium, type Browser } from "playwright";
 import { randomUUID } from "node:crypto";
 import { MAX_HISTORY, Vault, WebError } from "./web/vault.js";
 import { WebService, type SapGateway, type SapStatus } from "./web/sap.js";
-import { createWebServer, type WebServerOptions } from "./web/http.js";
+import { createWebServer, describeListenError, type WebServerOptions } from "./web/http.js";
 import { renderNote } from "./web/markdown.js";
 import { loadAppInfo, type AppInfo } from "./web/about.js";
 import { SapSession, AccessDeniedError, SessionExpiredError, type SessionState, type SessionStore } from "./session.js";
@@ -371,6 +371,14 @@ test("idle lock signs every browser session out; the unauthenticated state poll 
     assert.equal((await f.request("/api/unlock", "POST", { password: PASSWORD })).status, 200);
     assert.equal((await f.request("/api/history")).status, 200);
   } finally { await f.cleanup(); }
+});
+
+test("a busy or forbidden port is reported by name; other listen errors stay masked", () => {
+  const busy = describeListenError(Object.assign(new Error("listen EADDRINUSE"), { code: "EADDRINUSE" }), 3210);
+  assert.ok(busy instanceof WebError); assert.equal(busy.code, "PORT_IN_USE"); assert.match(busy.message, /3210/);
+  const forbidden = describeListenError(Object.assign(new Error("listen EACCES"), { code: "EACCES" }), 80);
+  assert.ok(forbidden instanceof WebError); assert.equal(forbidden.code, "PORT_FORBIDDEN");
+  const other = new Error("cookie secret in message"); assert.equal(describeListenError(other, 3210), other);
 });
 
 test("About retains the app version when Git metadata is unavailable", async () => {

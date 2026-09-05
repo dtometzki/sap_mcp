@@ -6,7 +6,7 @@ import { loadDotEnv, scrubCredentialsFromEnv } from "../env.js";
 import { safeErrorMessage } from "../errors.js";
 import { Vault, WebError } from "./vault.js";
 import { BrowserSapGateway, WebService } from "./sap.js";
-import { createWebServer } from "./http.js";
+import { createWebServer, describeListenError } from "./http.js";
 
 async function main(): Promise<void> {
   loadDotEnv();
@@ -55,7 +55,7 @@ async function main(): Promise<void> {
   try {
     await new Promise<void>((resolveStart, reject) => { server.once("error", reject); server.listen(port, "127.0.0.1", resolveStart); });
     console.log(`SAP Notes: http://127.0.0.1:${port}`);
-  } catch (error) { await shutdown(); throw error; }
+  } catch (error) { await shutdown(); throw describeListenError(error, port); }
 }
 main().catch((error: unknown) => {
   console.error(error instanceof WebError ? error.message : safeErrorMessage(error));

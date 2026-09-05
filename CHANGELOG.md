@@ -7,6 +7,13 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.9.1] – 2026-09-05
+
+### Behoben
+- Web-App: Ist der Port beim Start bereits belegt (`EADDRINUSE`) oder nicht
+  erlaubt (`EACCES`), nennt die Startmeldung Port und Ursache statt des
+  generischen „Operation failed“. Andere Startfehler bleiben wie bisher maskiert.
+
 ## [1.9.0] – 2026-09-05
 
 ### Hinzugefügt

@@ -150,7 +150,7 @@ Installation ohne Git-Metadaten steht beim Commit „Nicht verfügbar“.
 
 | Variable | Default | Zweck |
 |---|---|---|
-| `SAP_WEB_PORT` | `3210` | Lokaler HTTP-Port, 1–65535 |
+| `SAP_WEB_PORT` | `3210` | Lokaler HTTP-Port, 1–65535. Ist der Port belegt, bricht der Start mit einer entsprechenden Meldung ab |
 | `SAP_WEB_DATA_DIR` | `~/.sap-notes-web` | Datenverzeichnis mit `vault.enc` und Prozess-Sperrdatei `server.lock` |
 | `SAP_WEB_IDLE_LOCK_MS` | `1800000` | Tresor nach Inaktivität sperren, alle Browser-Sitzungen abmelden (0 = deaktiviert) |
 
