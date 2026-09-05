@@ -19,6 +19,7 @@ session.json
 
 # Stale git lock artifacts
 _to_delete/
+Claude outputs/
 
 # Local web-app vault and process lock
 .sap-notes-web/
