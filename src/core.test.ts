@@ -17,7 +17,9 @@ import {
   SessionExpiredError,
   assertNotLoggedOut,
   isUsableStorageState,
+  interpretProbeResponse,
   looksLikeLoginPage,
+  probeNoteId,
   type SapSession,
 } from "./session.js";
 import {
@@ -693,4 +695,24 @@ test("inline attachment output uses a fixed trust-boundary label", () => {
   assert.match(output, /----- BEGIN ATTACHMENT DOWNLOAD -----/);
   assert.doesNotMatch(output, /BEGIN ATTACHMENT REPORT/);
   assert.ok(output.indexOf("untrusted third-party content") < output.indexOf(portalName));
+});
+
+test("session probe: API answers decide only when unambiguous, otherwise the page probe runs", () => {
+  const api = "https://me.sap.com/backend/raw/sapnotes/Detail?q=2170696&t=E";
+  assert.equal(interpretProbeResponse(200, "application/json; charset=utf-8", undefined, api), "authenticated");
+  assert.equal(interpretProbeResponse(401, "application/json", undefined, api), "expired");
+  assert.equal(interpretProbeResponse(302, "", "https://accounts.sap.com/saml2/idp/sso", api), "expired");
+  assert.equal(interpretProbeResponse(302, "", "/saml2/idp/sso", "https://accounts.sap.com/x"), "expired");
+  assert.equal(interpretProbeResponse(200, "text/html", undefined, "https://accounts.sap.com/saml2/idp/sso"), "expired");
+  // Ambiguous: redirect elsewhere, HTML at the API URL, 403, 5xx, missing Location.
+  assert.equal(interpretProbeResponse(302, "", "https://me.sap.com/maintenance", api), "unknown");
+  assert.equal(interpretProbeResponse(302, "", undefined, api), "unknown");
+  assert.equal(interpretProbeResponse(200, "text/html", undefined, api), "unknown");
+  assert.equal(interpretProbeResponse(403, "application/json", undefined, api), "unknown");
+  assert.equal(interpretProbeResponse(503, "text/html", undefined, api), "unknown");
+  assert.equal(interpretProbeResponse(302, "", "http://[bad", api), "unknown");
+  assert.equal(probeNoteId("https://me.sap.com/notes/2170696"), "2170696");
+  assert.equal(probeNoteId("https://me.sap.com/notes/2170696/E"), "2170696");
+  assert.equal(probeNoteId("https://me.sap.com/home"), "2170696");
+  assert.equal(probeNoteId("not a url"), "2170696");
 });

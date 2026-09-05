@@ -7,6 +7,34 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.9.0] – 2026-09-05
+
+### Hinzugefügt
+- Web-App: Inaktivitätssperre. Ohne authentifizierte Anfrage sperrt der Server
+  den Tresor nach `SAP_WEB_IDLE_LOCK_MS` (Default 30 Minuten, 0 = aus) und meldet
+  alle Browser-Sitzungen ab; das Status-Polling der Oberfläche verlängert die
+  Frist nicht. Die Oberfläche zeigt nach einer Fremd-/Inaktivitätssperre einen Hinweis.
+- CI: `npm audit --omit=dev --audit-level=high` als Prüfschritt.
+
+### Geändert
+- Session-Prüfung (`isAuthenticated`) fragt zuerst die Note-Detail-JSON-API mit
+  den Session-Cookies ab statt die Portal-Seite zu rendern; Auto-Login,
+  `sap_session_status` und die Web-Prüfung antworten dadurch mehrere Sekunden
+  schneller. Bei mehrdeutiger API-Antwort bleibt die bisherige Seitenprüfung.
+- Web-App: Suchverlauf auf 500 Einträge begrenzt (neueste zuerst); ältere
+  Tresore werden beim nächsten Schreiben verkleinert.
+- Web-App: `/api/state` und `/api/history` klonen nicht mehr den gesamten Tresor
+  inklusive Session-Cookies; Existenzprüfung des Tresors per `stat` statt Vollzugriff.
+- CI: GitHub-Actions per Commit-SHA gepinnt, Workflow-Token nur mit Leserechten.
+
+### Behoben
+- `saveState` setzt ein bereits vorhandenes Session-Verzeichnis
+  (`~/.sap-notes-mcp`) auf `0700`, wie es Anhang- und Tresor-Verzeichnisse
+  bereits tun.
+- Web-App: Verlieren zwei gleichzeitig startende Prozesse das Rennen um eine
+  verwaiste `server.lock`, erscheint die reguläre „läuft bereits“-Meldung statt
+  eines verschleierten internen Fehlers.
+
 ## [1.8.1] – 2026-09-04
 
 ### Behoben

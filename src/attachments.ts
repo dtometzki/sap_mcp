@@ -1,7 +1,7 @@
 import { PublicError } from "./errors.js";
 import { rejectApiRedirect } from "./api.js";
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, open, rename, rm, type FileHandle } from "node:fs/promises";
+import { chmod, open, rename, rm, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
 import { buildUrl, type Config } from "./config.js";
 import {
@@ -14,6 +14,7 @@ import {
   AccessDeniedError,
   SessionExpiredError,
   assertNotLoggedOut,
+  ensurePrivateDirectory,
   looksLikeLoginPage,
   type SapSession,
 } from "./session.js";
@@ -57,7 +58,7 @@ export const INLINE_TEXT_LIMIT = 50_000;
 export const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
 const MAX_ATTACHMENT_REDIRECTS = 5;
 
-export { isAllowedAttachmentHost };
+export { ensurePrivateDirectory, isAllowedAttachmentHost };
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
@@ -110,12 +111,6 @@ export async function fetchAllowedAttachment(
     }
     currentUrl = new URL(location, currentUrl).toString();
   }
-}
-
-/** Creates `path` (and parents) and forces owner-only access, including on an existing dir. */
-export async function ensurePrivateDirectory(path: string): Promise<void> {
-  await mkdir(path, { recursive: true, mode: 0o700 });
-  await chmod(path, 0o700);
 }
 
 /**

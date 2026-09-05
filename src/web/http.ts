@@ -37,8 +37,19 @@ function json(response: ServerResponse, status: number, data: unknown): void {
   response.end(JSON.stringify(data));
 }
 
+export interface WebServerOptions {
+  /**
+   * Lock the vault after this many milliseconds without an authenticated request.
+   * An unlocked vault holds the SAP password and the session cookies in memory; a
+   * forgotten tab must not keep them available indefinitely. The state poll of the
+   * UI (/api/state) is unauthenticated and therefore never extends the timer.
+   * 0 disables the idle lock.
+   */
+  idleLockMs?: number;
+}
+
 /** Fixed loopback host, authenticated API and same-origin JSON mutations (no CORS). */
-export function createWebServer(service: WebService) {
+export function createWebServer(service: WebService, options: WebServerOptions = {}) {
   const appInfo = loadAppInfo();
   // Observe an early read failure even if the About endpoint is never requested.
   void appInfo.catch(() => undefined);
@@ -47,6 +58,21 @@ export function createWebServer(service: WebService) {
   let authBusy = false;
   let locking = false;
   let attempts: number[] = [];
+  const idleLockMs = options.idleLockMs ?? 0;
+  let idleTimer: NodeJS.Timeout | undefined;
+  /** Same effect as POST /api/lock: every browser session is signed out at once. */
+  async function lockAll(): Promise<void> {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = undefined;
+    generation++; sessions.clear(); locking = true;
+    try { await service.lock(); } finally { locking = false; }
+  }
+  function touchIdle(): void {
+    if (idleTimer) clearTimeout(idleTimer);
+    if (idleLockMs <= 0) return;
+    idleTimer = setTimeout(() => { void lockAll().catch(() => undefined); }, idleLockMs);
+    idleTimer.unref();
+  }
   const assets = new Map([
     ["/", { url: new URL("../../web/index.html", import.meta.url), type: "text/html; charset=utf-8" }],
     ["/app.css", { url: new URL("../../web/app.css", import.meta.url), type: "text/css; charset=utf-8" }],
@@ -61,6 +87,7 @@ export function createWebServer(service: WebService) {
   server.requestTimeout = 30_000;
   server.headersTimeout = 10_000;
   server.keepAliveTimeout = 5000;
+  server.on("close", () => { if (idleTimer) clearTimeout(idleTimer); });
   async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     response.setHeader("Cache-Control", "no-store");
     response.setHeader("X-Content-Type-Options", "nosniff");
@@ -96,7 +123,7 @@ export function createWebServer(service: WebService) {
       if (path === "/api/state" && method === "GET") {
         const exists = await service.vault.exists();
         const unlocked = hasSession();
-        json(response, 200, { exists, unlocked, ...(unlocked ? { username: service.vault.snapshot().credentials?.username, sap: service.status } : {}) }); return;
+        json(response, 200, { exists, unlocked, ...(unlocked ? { username: service.vault.username, sap: service.status } : {}) }); return;
       }
       if ((path === "/api/setup" || path === "/api/unlock") && method === "POST") {
         const { password } = authSchema.parse(await body(request));
@@ -110,6 +137,7 @@ export function createWebServer(service: WebService) {
           const token = randomBytes(32).toString("hex");
           if (sessions.size >= 32) sessions.clear();
           sessions.add(token);
+          touchIdle();
           response.setHeader("Set-Cookie", `sap_web=${token}; Path=/; HttpOnly; SameSite=Strict`);
           json(response, 200, { unlocked: true });
         } finally { authBusy = false; }
@@ -118,6 +146,7 @@ export function createWebServer(service: WebService) {
       if (!path.startsWith("/api/")) throw new WebError("NOT_FOUND", "Nicht gefunden.", 404);
       if (!valid) throw locked();
       authenticated = true;
+      touchIdle();
       const authorizedBody = async (): Promise<unknown> => {
         const value = await body(request);
         // A slow request body must not survive lock/unlock or password rotation.
@@ -126,8 +155,7 @@ export function createWebServer(service: WebService) {
       };
       if (path === "/api/lock" && method === "POST") {
         await authorizedBody();
-        generation++; sessions.clear(); locking = true;
-        try { await service.lock(); } finally { locking = false; }
+        await lockAll();
         response.setHeader("Set-Cookie", "sap_web=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
         json(response, 200, { unlocked: false }); return;
       }
@@ -159,7 +187,7 @@ export function createWebServer(service: WebService) {
       } else if (path === "/api/history" && method === "GET") {
         const query = z.string().max(500).parse(url.searchParams.get("q") ?? "").toLocaleLowerCase("de");
         const offset = z.coerce.number().int().min(0).parse(url.searchParams.get("offset") ?? 0);
-        const entries = service.vault.snapshot().history.filter(entry => entry.query.toLocaleLowerCase("de").includes(query));
+        const entries = service.vault.history.filter(entry => entry.query.toLocaleLowerCase("de").includes(query));
         result = { entries: entries.slice(offset, offset + 50), total: entries.length };
       } else if ((path === "/api/history" || path.startsWith("/api/history/")) && method === "DELETE") {
         await authorizedBody();

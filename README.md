@@ -126,6 +126,7 @@ npm run web
    ausführen, filtern oder löschen. Gespeichert werden Suchtext, Zeitpunkt,
    Trefferlimit und Trefferzahl. Fehler und direkt geöffnete Notes erscheinen
    nicht im Suchverlauf; vollständige Note-Inhalte werden nicht dauerhaft gespeichert.
+   Der Verlauf behält die 500 neuesten Einträge.
 
 Auf Desktop-Fenstern ab 900 × 650 Pixeln bleiben Kopfzeile, Suche und Footer mit
 **About** gemeinsam sichtbar. Lange Trefferlisten und Notes scrollen innerhalb
@@ -134,7 +135,9 @@ kleinere Fenster verwenden eine vertikal scrollbare Ansicht.
 
 **Sperren** beendet die SAP-Browser, verwirft entschlüsselte Daten und meldet alle
 App-Browser-Sitzungen ab. Nach einem Serverneustart ist der Tresor ebenfalls gesperrt.
-Das Schließen eines Tabs sperrt den Server nicht; es gibt keine Inaktivitätssperre.
+Das Schließen eines Tabs sperrt den Server nicht; stattdessen sperrt der Server nach
+30 Minuten ohne Suche, Note-Aufruf oder Einstellungsänderung automatisch
+(`SAP_WEB_IDLE_LOCK_MS`). Das reine Offenhalten der Seite zählt nicht als Aktivität.
 Weitere Browser benötigen das Master-Passwort zum Entsperren ihrer eigenen Sitzung.
 Ändern des Master-Passworts meldet die anderen Browser-Sitzungen ab.
 
@@ -149,6 +152,7 @@ Installation ohne Git-Metadaten steht beim Commit „Nicht verfügbar“.
 |---|---|---|
 | `SAP_WEB_PORT` | `3210` | Lokaler HTTP-Port, 1–65535 |
 | `SAP_WEB_DATA_DIR` | `~/.sap-notes-web` | Datenverzeichnis mit `vault.enc` und Prozess-Sperrdatei `server.lock` |
+| `SAP_WEB_IDLE_LOCK_MS` | `1800000` | Tresor nach Inaktivität sperren, alle Browser-Sitzungen abmelden (0 = deaktiviert) |
 
 Nur die exakte Adresse `http://127.0.0.1:<Port>` wird akzeptiert, kein Netzwerkzugriff,
 kein Reverse-Proxy und kein öffentliches Hosting. Das lokale HTTP-Cookie hat
@@ -271,7 +275,7 @@ Antwort des Portals.
 | `SAP_NOTE_API_URL` | `https://me.sap.com/backend/raw/sapnotes/Detail?q={id}&t=E&isVTEnabled=false` | JSON-API hinter der Note-Seite; Quelle der Anhangsliste (`{id}`) |
 | `SAP_ATTACHMENT_DIR` | `~/Downloads/sap-notes` | Zielordner für Anhänge (ein Unterordner je Note-Nummer mit `0700`, `~` wird expandiert) |
 | `SAP_ATTACHMENT_COOKIE_HOSTS` | – | Zusätzliche Hosts, die beim Anhang-Download Session-Cookies erhalten dürfen (kommagetrennt; Default: `me.sap.com`, `*.support.sap.com`, `accounts.sap.com`) |
-| `SAP_PROBE_URL` | `https://me.sap.com/notes/2170696` | Seite zur Session-Prüfung; muss `https://*.sap.com` oder `https://*.sap.cn` sein |
+| `SAP_PROBE_URL` | `https://me.sap.com/notes/2170696` | Seite zur Session-Prüfung; muss `https://*.sap.com` oder `https://*.sap.cn` sein. Die Prüfung fragt zuerst `SAP_NOTE_API_URL` für dieselbe Note-Nummer ab und rendert die Seite nur bei mehrdeutiger Antwort |
 | `SAP_NAV_TIMEOUT_MS` | `60000` | Navigations-Timeout |
 | `SAP_API_TIMEOUT_MS` | `60000` | Timeout für direkte HTTP-API-Aufrufe (Coveo-Token/-Suche, Note-Detail-API); beim Anhang-Download maximale Wartezeit zwischen zwei Datenblöcken |
 | `SAP_NETWORK_IDLE_TIMEOUT_MS` | `4000` | Kurze Wartezeit auf Netzwerk-Ruhe |

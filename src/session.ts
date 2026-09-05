@@ -8,8 +8,8 @@ import {
   type BrowserContext,
   type Page,
 } from "playwright";
-import type { Config } from "./config.js";
-import { assertAllowedPageUrl } from "./urls.js";
+import { buildUrl, type Config } from "./config.js";
+import { assertAllowedPageUrl, isAllowedApiUrl, isAllowedLoginUrl } from "./urls.js";
 
 export class SessionExpiredError extends PublicError {
   constructor() {
@@ -89,6 +89,54 @@ export function assertNotLoggedOut(
   if (status === 401) throw new SessionExpiredError();
   if (status === 403) throw new AccessDeniedError(subject);
   if (!ok && looksLikeLoginPage(url)) throw new SessionExpiredError();
+}
+
+/** Creates `path` (and parents) and forces owner-only access, including on an existing dir. */
+export async function ensurePrivateDirectory(path: string): Promise<void> {
+  await mkdir(path, { recursive: true, mode: 0o700 });
+  await chmod(path, 0o700);
+}
+
+/** Note used by the session probe when SAP_PROBE_URL carries no note number. */
+const DEFAULT_PROBE_NOTE_ID = "2170696";
+
+/** Note number of the probe page, so the API probe asks for the same document. */
+export function probeNoteId(probeUrl: string): string {
+  try {
+    const match = /\/(\d{4,10})(?:[/?#]|$)/.exec(new URL(probeUrl).pathname);
+    return match?.[1] ?? DEFAULT_PROBE_NOTE_ID;
+  } catch {
+    return DEFAULT_PROBE_NOTE_ID;
+  }
+}
+
+export type ProbeVerdict = "authenticated" | "expired" | "unknown";
+
+/**
+ * Reads the note-detail API response of the session probe. Only unambiguous answers
+ * count; everything else ("unknown") falls back to rendering the probe page, so a
+ * reshaped API can never turn a valid session into a login loop — or vice versa.
+ */
+export function interpretProbeResponse(
+  status: number,
+  contentType: string,
+  location: string | undefined,
+  finalUrl: string,
+): ProbeVerdict {
+  if (status === 401) return "expired";
+  if (status >= 300 && status < 400) {
+    if (!location) return "unknown";
+    try {
+      return isAllowedLoginUrl(new URL(location, finalUrl).href) ? "expired" : "unknown";
+    } catch {
+      return "unknown";
+    }
+  }
+  if (status === 200) {
+    if (/json/i.test(contentType) && !looksLikeLoginPage(finalUrl)) return "authenticated";
+    if (/text\/html/i.test(contentType) && looksLikeLoginPage(finalUrl)) return "expired";
+  }
+  return "unknown";
 }
 
 function toError(value: unknown): Error {
@@ -295,7 +343,8 @@ export class SapSession {
       return;
     }
     const target = this.config.storageStatePath;
-    await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+    // Also tightens a pre-existing directory; mkdir's mode only applies when creating.
+    await ensurePrivateDirectory(dirname(target));
 
     const state = await this.context.storageState();
     const temporary = `${target}.${process.pid}.tmp`;
@@ -310,8 +359,47 @@ export class SapSession {
     await chmod(target, 0o600);
   }
 
-  /** Loads the probe page and reports whether the stored session still authenticates. */
+  /**
+   * Reports whether the stored session still authenticates.
+   *
+   * Asks the note-detail JSON API first: one cookie-authenticated request instead of
+   * rendering the portal SPA (which costs the networkidle timeout plus settle time on
+   * every probe — auto-login, `sap_session_status`, the web app's check). The page
+   * probe remains the fallback for every answer the API does not settle unambiguously.
+   */
   async isAuthenticated(): Promise<boolean> {
+    const verdict = await this.probeViaApi().catch((): ProbeVerdict => "unknown");
+    if (verdict !== "unknown") return verdict === "authenticated";
+    return this.probeViaPage();
+  }
+
+  private async probeViaApi(): Promise<ProbeVerdict> {
+    if (!this.context) throw new Error("Session not started");
+    const url = buildUrl(this.config.noteDetailApiUrlTemplate, {
+      id: probeNoteId(this.config.sessionProbeUrl),
+    });
+    if (!isAllowedApiUrl(url)) return "unknown";
+    const response = await this.context.request.get(url, {
+      headers: { accept: "application/json" },
+      timeout: this.config.apiTimeoutMs,
+      maxRedirects: 0,
+    });
+    try {
+      const headers = response.headers();
+      const finalUrl = response.url();
+      if (finalUrl && !isAllowedApiUrl(finalUrl)) return "unknown";
+      return interpretProbeResponse(
+        response.status(),
+        headers["content-type"] ?? "",
+        headers.location,
+        finalUrl,
+      );
+    } finally {
+      await response.dispose().catch(() => undefined);
+    }
+  }
+
+  private async probeViaPage(): Promise<boolean> {
     try {
       const page = await this.open(this.config.sessionProbeUrl);
       await page.close();

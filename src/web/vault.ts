@@ -1,5 +1,5 @@
-import { createCipheriv, createDecipheriv, randomBytes, scrypt } from "node:crypto";
-import { chmod, mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { createCipheriv, createDecipheriv, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
+import { chmod, mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
 import type { Credentials } from "../autoLogin.js";
@@ -16,6 +16,14 @@ export const masterSchema = z.string().min(12, "Mindestens 12 Zeichen verwenden.
 export const historySchema = z.object({ id: z.string().uuid(), query: z.string().min(2).max(500), limit: z.number().int().min(1).max(25), count: z.number().int().min(0).max(25), at: z.string().datetime() });
 export type HistoryEntry = z.infer<typeof historySchema>;
 export interface VaultData { credentials?: Credentials; session?: SessionState; history: HistoryEntry[] }
+/**
+ * Newest entries win. Without a cap the history grows with every search, and every
+ * entry is paid for on each write (full re-encrypt + fsync) and each snapshot (clone).
+ * Enforced on write and on unlock, not in the schema, so an older oversized vault still
+ * opens and simply shrinks on its next write.
+ */
+export const MAX_HISTORY = 500;
+function trimHistory(data: VaultData): void { if (data.history.length > MAX_HISTORY) data.history.length = MAX_HISTORY; }
 const dataSchema = z.object({ credentials: credentialsSchema.optional(), session: z.custom<SessionState>(isUsableStorageState).optional(), history: z.array(historySchema) }).strict();
 const envelopeSchema = z.object({ version: z.literal(1), salt: z.string().regex(/^[a-f0-9]{32}$/), iv: z.string().regex(/^[a-f0-9]{24}$/), tag: z.string().regex(/^[a-f0-9]{32}$/), ciphertext: z.string().regex(/^[a-f0-9]+$/) }).strict();
 const aad = Buffer.from("sap-notes-web:v1");
@@ -33,12 +41,21 @@ export class Vault {
   constructor(readonly path: string) {}
   get unlocked(): boolean { return this.key !== undefined && this.data !== undefined; }
   async exists(): Promise<boolean> {
-    try { await readFile(this.path); return true; }
+    try { await stat(this.path); return true; }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
   }
   snapshot(): VaultData {
     if (!this.data || !this.key) throw locked();
     return structuredClone(this.data);
+  }
+  /** Cheap reads for the polled state endpoint: no clone of the (large) session state. */
+  get username(): string | undefined {
+    if (!this.data || !this.key) throw locked();
+    return this.data.credentials?.username;
+  }
+  get history(): HistoryEntry[] {
+    if (!this.data || !this.key) throw locked();
+    return structuredClone(this.data.history);
   }
   private serial<T>(fn: () => Promise<T>): Promise<T> {
     const task = this.queue.then(fn);
@@ -99,6 +116,7 @@ export class Vault {
         let data: VaultData;
         try { data = dataSchema.parse(JSON.parse(clear.toString("utf8")) as unknown); }
         finally { clear.fill(0); }
+        trimHistory(data);
         if (epoch !== this.epoch) throw locked();
         this.key?.fill(0); this.key = Buffer.from(key); this.salt = salt; this.data = data;
       } catch (error) {
@@ -113,6 +131,7 @@ export class Vault {
       if (epoch !== this.epoch || !this.key || !this.salt) throw locked();
       const next = this.snapshot();
       change(next);
+      trimHistory(next);
       dataSchema.parse(next);
       await this.write(next, this.key, this.salt);
       if (epoch !== this.epoch) throw locked();
@@ -125,7 +144,6 @@ export class Vault {
     return this.serial(async () => {
       if (!this.key || !this.salt || epoch !== this.epoch) throw locked();
       const verified = await derive(current, this.salt);
-      const { timingSafeEqual } = await import("node:crypto");
       const valid = this.key !== undefined && timingSafeEqual(verified, this.key);
       verified.fill(0);
       if (!valid) throw new WebError("UNLOCK_FAILED", "Das aktuelle Master-Passwort stimmt nicht.", 401);
