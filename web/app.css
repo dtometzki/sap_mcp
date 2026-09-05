@@ -74,3 +74,6 @@ main, .search-layout > *, .settings-grid > *, .query-field, .history-query {
   .note-body tr, .note-body pre, .note-body blockquote { break-inside: avoid; }
   .print-meta { display: block; margin-top: 1.5rem; padding-top: .6rem; border-top: 1px solid #999; font-size: 9pt; color: #444; overflow-wrap: anywhere; }
 }
+
+.note-body .attachment-download { border: 0; background: transparent; padding: 0; text-align: left; color: var(--blue); font: inherit; text-decoration: underline; overflow-wrap: anywhere; max-width: 100%; }
+@media print { .note-body .attachment-download { color: black; text-decoration: none; } }

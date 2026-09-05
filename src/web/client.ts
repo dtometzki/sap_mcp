@@ -126,6 +126,39 @@ function sourceLink(url: string): HTMLAnchorElement {
   try { const parsed = new URL(url); if (parsed.protocol === "https:") link.href = parsed.href; } catch { /* No unsafe URLs. */ }
   link.target = "_blank"; link.rel = "noopener noreferrer"; return link;
 }
+/** The same authenticated action is available in the list and the note's attachment table. */
+function attachmentDownloadButton(number: string, fileName: string, sequence: number, label = fileName): HTMLButtonElement {
+  const button = node("button", label, "attachment-download"); button.type = "button";
+  button.setAttribute("aria-label", `${fileName} herunterladen`);
+  button.addEventListener("click", () => { void action(async () => {
+    button.textContent = "Wird geladen …";
+    try {
+      const value = await api<{ blob: Blob; fileName: string }>("/api/attachments/download", "POST", { number, fileName }, true);
+      if (sequence !== noteSequence) throw new ObsoleteRequest();
+      const url = URL.createObjectURL(value.blob); downloadUrls.add(url);
+      const link = node("a"); link.href = url; link.download = value.fileName;
+      document.body.append(link); link.click(); link.remove();
+      window.setTimeout(() => { URL.revokeObjectURL(url); downloadUrls.delete(url); }, 1000);
+      message(`„${value.fileName}“ wurde an den Browser übergeben. Falls ein Speicherdialog erscheint, mit „Sichern“ bestätigen.`);
+    } finally { button.textContent = label; }
+  }, button); });
+  return button;
+}
+function enableAttachmentTables(content: HTMLElement, number: string, sequence: number): void {
+  for (const table of content.querySelectorAll("table")) {
+    const rows = [...table.rows];
+    const heading = rows[0]; if (!heading) continue;
+    const column = [...heading.cells].findIndex(cell => /^(file name|dateiname)$/i.test(cell.textContent?.trim() ?? ""));
+    if (column < 0) continue;
+    for (const row of rows.slice(1)) {
+      const cell = row.cells[column];
+      const fileName = cell?.textContent?.trim() ?? "";
+      if (!cell || fileName.length > 1024 || !/\.[a-z0-9]{1,10}$/i.test(fileName)) continue;
+      // Only the file name is submitted. The server resolves it against SAP's current list.
+      cell.replaceChildren(attachmentDownloadButton(number, fileName, sequence));
+    }
+  }
+}
 function attachmentPanel(number: string, sequence: number): { button: HTMLButtonElement; panel: HTMLElement } {
   const panel = node("section", undefined, "attachments print-hide"); panel.hidden = true;
   panel.setAttribute("aria-label", "Anhänge");
@@ -141,19 +174,7 @@ function attachmentPanel(number: string, sequence: number): { button: HTMLButton
       const row = node("div", undefined, "attachment-row");
       const label = node("div", attachment.fileName);
       if (attachment.sizeBytes !== undefined) label.append(node("small", `${new Intl.NumberFormat("de-DE", { maximumFractionDigits: 1 }).format(attachment.sizeBytes / 1024)} KB`));
-      const download = node("button", "Herunterladen"); download.type = "button";
-      download.setAttribute("aria-label", `${attachment.fileName} herunterladen`);
-      download.addEventListener("click", () => { void action(async () => {
-        download.textContent = "Wird geladen …";
-        try {
-          const value = await api<{ blob: Blob; fileName: string }>("/api/attachments/download", "POST", { number, fileName: attachment.fileName }, true);
-          if (sequence !== noteSequence) throw new ObsoleteRequest();
-          const url = URL.createObjectURL(value.blob); downloadUrls.add(url);
-          const link = node("a"); link.href = url; link.download = value.fileName;
-          document.body.append(link); link.click(); link.remove();
-          window.setTimeout(() => { URL.revokeObjectURL(url); downloadUrls.delete(url); }, 1000);
-        } finally { download.textContent = "Herunterladen"; }
-      }, download); });
+      const download = attachmentDownloadButton(number, attachment.fileName, sequence, "Herunterladen");
       row.append(label, download); panel.append(row);
     }
   }, button); });
@@ -174,6 +195,7 @@ async function openNote(number: string): Promise<{ id: string; title: string }> 
     const content = node("div", undefined, "note-body");
     // Only HTML produced by the server's HTML-disabled Markdown renderer.
     content.innerHTML = note.html;
+    enableAttachmentTables(content, number, sequence);
     el("note-content").replaceChildren(header, attachments.panel, content, printMeta(note.url));
     document.title = `SAP Note ${note.id} – ${note.title}`;
     for (const hit of document.querySelectorAll<HTMLButtonElement>(".result")) hit.classList.toggle("selected", hit.dataset.number === number);

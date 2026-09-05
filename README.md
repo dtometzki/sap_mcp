@@ -132,7 +132,9 @@ des Terminals, nicht aber Abmelden oder Neustart des Rechners – danach erneut
 4. Nach Fehlermeldung, Produkt oder Problem suchen (2–500 Zeichen; 1–25 Treffer,
    Standard 10), oder eine Note direkt über ihre 4–10-stellige Nummer öffnen.
    **Anhänge anzeigen** listet verfügbare Dateien mit Download-Button auf (z. B. ZIP
-   oder PDF). **Herunterladen** speichert die Datei über den Browser.
+   oder PDF). Auch die Dateinamen in der Anhangstabelle des Note-Textes sind direkt
+   anklickbar. **Herunterladen** speichert die Datei über den Browser; einen
+   angezeigten Speicherdialog mit **Sichern** bestätigen.
    **Als PDF sichern** in der Note-Ansicht öffnet den Druckdialog des Browsers
    (macOS: „Als PDF sichern“); gedruckt wird nur die Note mit Quelle und
    Abrufzeitpunkt, der vorgeschlagene Dateiname ist „SAP Note <Nr> – <Titel>“.

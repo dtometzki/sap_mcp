@@ -7,6 +7,15 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.12.1] – 2026-09-05
+
+### Behoben
+- Web-App: Dateinamen in der Anhangstabelle (z. B. Note 1969700) lösen jetzt
+  direkt den geschützten Download aus. Die separate Anhangsliste bleibt verfügbar.
+  Nach Übergabe an den Browser erscheint ein Hinweis zum Speicherdialog.
+- Anhangsgrößen aus SAPs `FileSize` werden korrekt von KB in Bytes umgerechnet;
+  explizite Byte-Angaben haben Vorrang.
+
 ## [1.12.0] – 2026-09-05
 
 ### Hinzugefügt

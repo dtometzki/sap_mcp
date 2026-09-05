@@ -264,7 +264,7 @@ const FILE_NAME_PATTERN = /\.[a-z0-9]{1,10}$/i;
 
 const FILE_NAME_KEYS = ["FileName", "Filename", "fileName", "filename", "Name", "name"];
 const URL_KEYS = ["URL", "Url", "url", "Uri", "uri", "DownloadUrl", "downloadUrl"];
-const SIZE_KEYS = ["FileSize", "Size", "fileSize", "size", "SizeInBytes"];
+const SIZE_KEYS = ["Size", "fileSize", "size"];
 
 /** The portal wraps most scalars as { value: ... }; unwrap one level, then coerce. */
 function readField(source: Record<string, unknown>, keys: readonly string[]): string {
@@ -305,8 +305,13 @@ export function extractAttachments(payload: unknown, baseUrl: string): NoteAttac
     if (!isAllowedAttachmentHost(url)) return;
     if (into.has(url)) return;
     const attachment: NoteAttachment = { fileName, url };
-    const size = Number.parseInt(readField(node, SIZE_KEYS), 10);
-    if (Number.isFinite(size) && size > 0) attachment.sizeBytes = size;
+    // SAP's note-detail FileSize is in KB (1024 bytes), as displayed in the portal.
+    // Explicit byte fields win; other API variants retain their byte semantics.
+    const bytes = readField(node, ["SizeInBytes", "sizeBytes"]);
+    const kilobytes = readField(node, ["FileSize"]);
+    const size = Number.parseFloat(bytes || kilobytes || readField(node, SIZE_KEYS));
+    const sizeBytes = Math.round(size * (!bytes && kilobytes ? 1024 : 1));
+    if (Number.isSafeInteger(sizeBytes) && sizeBytes > 0) attachment.sizeBytes = sizeBytes;
     into.set(url, attachment);
   };
 

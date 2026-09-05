@@ -88,7 +88,7 @@ class FakeSap implements SapGateway {
     if (this.failure) throw this.failure;
     return query === "zero" ? [] : [{ id: "2170696", title: "HANA <script>alert(1)</script>", url: "https://me.sap.com/notes/2170696" }];
   }
-  async note(number: string) { if (this.failure) throw this.failure; return { id: number, title: "HANA troubleshooting", url: `https://me.sap.com/notes/${number}`, markdown: "# Symptom\n\nA **bold** solution.\n\n<script>alert(1)</script>\n\n![track](https://example.com/pixel)\n\n[unsafe](javascript:alert(1))" }; }
+  async note(number: string) { if (this.failure) throw this.failure; return { id: number, title: "HANA troubleshooting", url: `https://me.sap.com/notes/${number}`, markdown: "# Symptom\n\nA **bold** solution.\n\n<script>alert(1)</script>\n\n![track](https://example.com/pixel)\n\n[unsafe](javascript:alert(1))\n\n### Attachments\n\n| File Name | File Size |\n| --- | --- |\n| SQLStatements.zip | 4 KB |\n| Anleitung.pdf | 8 KB |" }; }
   async attachments() { if (this.failure) throw this.failure; return [{ fileName: "SQLStatements.zip", sizeBytes: 4 }, { fileName: "Anleitung.pdf", sizeBytes: 8 }]; }
   async download(_number: string, fileName: string, signal: AbortSignal) { await this.waitForSearch; signal.throwIfAborted(); if (this.failure) throw this.failure; return { fileName, data: Buffer.from(fileName.endsWith(".pdf") ? "%PDF-1.7" : "PK\x03\x04") }; }
   async interactiveStart() { this.status = "interactive"; }
@@ -295,10 +295,18 @@ test("browser acceptance flow and WebMCP contracts use the same visible applicat
     await page.locator(".result").click(); await page.getByRole("heading", { name: "HANA troubleshooting" }).waitFor();
     assert.equal(await page.locator(".note-body strong").textContent(), "bold");
     assert.equal(await page.locator(".note-body img, .note-body script").count(), 0);
+    // Reproduce note 1969700: the portal's plain attachment-table names must download directly.
+    const inlineEvent = page.waitForEvent("download");
+    await page.locator(".note-body").getByRole("button", { name: "SQLStatements.zip herunterladen", exact: true }).click();
+    const inlineDownload = await inlineEvent;
+    assert.equal(inlineDownload.suggestedFilename(), "SQLStatements.zip");
+    const inlinePath = await inlineDownload.path(); assert.ok(inlinePath);
+    assert.equal((await readFile(inlinePath)).toString(), "PK\x03\x04");
+    await page.waitForFunction(() => document.getElementById("message")?.textContent?.includes("Speicherdialog"));
     await page.getByRole("button", { name: "Anhänge anzeigen", exact: true }).click();
     for (const fileName of ["SQLStatements.zip", "Anleitung.pdf"]) {
       const event = page.waitForEvent("download");
-      await page.getByRole("button", { name: `${fileName} herunterladen`, exact: true }).click();
+      await page.locator(".attachments").getByRole("button", { name: `${fileName} herunterladen`, exact: true }).click();
       const download = await event;
       assert.equal(download.suggestedFilename(), fileName);
       const path = await download.path(); assert.ok(path);

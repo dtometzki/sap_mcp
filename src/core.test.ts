@@ -331,7 +331,7 @@ test("extractAttachments reads the Attachments.Items shape with {value} wrappers
     {
       fileName: "ECS-PreMigration-param-fetch-Systemdb.txt",
       url: "https://me.sap.com/backend/raw/sapnotes/attachment/0003696257/abc123",
-      sizeBytes: 2048,
+      sizeBytes: 2048 * 1024,
     },
     {
       fileName: "ECS-PreMigration-param-fetch-Tenantdb.txt",
@@ -715,4 +715,16 @@ test("session probe: API answers decide only when unambiguous, otherwise the pag
   assert.equal(probeNoteId("https://me.sap.com/notes/2170696/E"), "2170696");
   assert.equal(probeNoteId("https://me.sap.com/home"), "2170696");
   assert.equal(probeNoteId("not a url"), "2170696");
+});
+
+
+test("SAP note FileSize uses KB while explicit byte sizes take precedence", () => {
+  const entries = extractAttachments({ Response: { SAPNote: { Attachments: { Items: [
+    { FileName: "SQLStatements_SHC.zip", FileSize: "171", URL: "/attachments/shc" },
+    { FileName: "manual.pdf", FileSize: "171", SizeInBytes: "175193", URL: "/attachments/pdf" },
+    { FileName: "unknown.zip", FileSize: "unknown", URL: "/attachments/unknown" },
+  ] } } } }, DETAIL_API_BASE);
+  assert.equal(entries[0]?.sizeBytes, 171 * 1024);
+  assert.equal(entries[1]?.sizeBytes, 175193);
+  assert.equal(entries[2]?.sizeBytes, undefined);
 });
