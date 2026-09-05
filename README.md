@@ -138,7 +138,19 @@ des Terminals, nicht aber Abmelden oder Neustart des Rechners – danach erneut
    **Als PDF sichern** in der Note-Ansicht öffnet den Druckdialog des Browsers
    (macOS: „Als PDF sichern“); gedruckt wird nur die Note mit Quelle und
    Abrufzeitpunkt, der vorgeschlagene Dateiname ist „SAP Note <Nr> – <Titel>“.
-5. Im **Suchverlauf** erfolgreiche Suchen einschließlich null Treffern erneut
+5. In der Note-Ansicht auf **☆ Merken** klicken, bis zu 10 eigene Stichwörter
+   (je 40 Zeichen, durch Kommas getrennt) und optional eine Notiz mit maximal
+   2000 Zeichen eintragen. **Favorit speichern** legt Nummer, Titel, Stichwörter
+   und eigene Notiz verschlüsselt im Tresor ab. **★ Favorit bearbeiten** öffnet
+   die gespeicherten Angaben; dort lässt sich der Favorit auch entfernen.
+6. Unter **Favoriten** nach Nummer, Titel, Stichwörtern oder eigener Notiz suchen,
+   nach einem Stichwort filtern und Notes direkt öffnen. Beim Öffnen lädt die App
+   den aktuellen Inhalt von SAP. Die Liste zeigt die zuletzt bearbeiteten zuerst
+   und umfasst maximal 500 Favoriten; weitere Einträge laden jeweils 50 nach.
+   Vorhandene Tresore werden automatisch um eine leere Favoritenliste ergänzt.
+   Favoriten bleiben beim Löschen des Suchverlaufs oder Wechseln des SAP-Kontos
+   erhalten; sie lassen sich auch ohne aktive SAP-Anmeldung bearbeiten.
+7. Im **Suchverlauf** erfolgreiche Suchen einschließlich null Treffern erneut
    ausführen, filtern oder löschen. Gespeichert werden Suchtext, Zeitpunkt,
    Trefferlimit und Trefferzahl. Fehler und direkt geöffnete Notes erscheinen
    nicht im Suchverlauf; vollständige Note-Inhalte werden nicht dauerhaft gespeichert.
@@ -176,7 +188,7 @@ kein Reverse-Proxy und kein öffentliches Hosting. Das lokale HTTP-Cookie hat
 restriktive Content Security Policy schützen die lokale Oberfläche. Es gibt keine
 CORS-Freigabe. Maximal fünf Entsperr-/Passwortprüfungen pro Minute sind erlaubt.
 
-Der Tresor verschlüsselt **SAP-Zugangsdaten, Cookies/localStorage und Suchverlauf**
+Der Tresor verschlüsselt **SAP-Zugangsdaten, Cookies/localStorage, Suchverlauf und Favoriten**
 mit AES-256-GCM. Aus dem Master-Passwort wird mit scrypt (`N=131072`, `r=8`, `p=1`)
 ein Schlüssel abgeleitet. Jeder Schreibvorgang verwendet eine neue 12-Byte-Nonce und
 einen 16-Byte-Authentifizierungstag. Die Datei wird atomar mit Rechten `0600` ersetzt;
@@ -212,7 +224,7 @@ und das zugehörige Master-Passwort nötig. Bestehende Daten nicht überschreibe
 
 Für einen neuen, leeren Tresor die App beenden und `vault.enc` umbenennen oder
 bewusst löschen. Beim nächsten Start kann ein neuer Tresor angelegt werden. Ohne
-das alte Passwort sind die bisherigen Zugangsdaten und der Suchverlauf nicht mehr
+das alte Passwort sind die bisherigen Zugangsdaten, der Suchverlauf und die Favoriten nicht mehr
 zugänglich. Eine verwaiste `server.lock` nach einem Absturz wird automatisch erkannt;
 eine beschädigte Sperrdatei erst entfernen, nachdem alle Web-App-Prozesse beendet sind.
 

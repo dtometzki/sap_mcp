@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { z } from "zod";
 import type { Credentials } from "../autoLogin.js";
 import { isUsableStorageState, type SessionState } from "../session.js";
+import { favoriteSchema, MAX_FAVORITES, type Favorite } from "./favorites.js";
 
 export class WebError extends Error {
   constructor(readonly code: string, message: string, readonly status = 400) {
@@ -15,7 +16,7 @@ export const credentialsSchema = z.object({ username: z.string().trim().min(1).m
 export const masterSchema = z.string().min(12, "Mindestens 12 Zeichen verwenden.").max(1024);
 export const historySchema = z.object({ id: z.string().uuid(), query: z.string().min(2).max(500), limit: z.number().int().min(1).max(25), count: z.number().int().min(0).max(25), at: z.string().datetime() });
 export type HistoryEntry = z.infer<typeof historySchema>;
-export interface VaultData { credentials?: Credentials; session?: SessionState; history: HistoryEntry[] }
+export interface VaultData { credentials?: Credentials; session?: SessionState; history: HistoryEntry[]; favorites: Favorite[] }
 /**
  * Newest entries win. Without a cap the history grows with every search, and every
  * entry is paid for on each write (full re-encrypt + fsync) and each snapshot (clone).
@@ -24,7 +25,7 @@ export interface VaultData { credentials?: Credentials; session?: SessionState; 
  */
 export const MAX_HISTORY = 500;
 function trimHistory(data: VaultData): void { if (data.history.length > MAX_HISTORY) data.history.length = MAX_HISTORY; }
-const dataSchema = z.object({ credentials: credentialsSchema.optional(), session: z.custom<SessionState>(isUsableStorageState).optional(), history: z.array(historySchema) }).strict();
+const dataSchema = z.object({ credentials: credentialsSchema.optional(), session: z.custom<SessionState>(isUsableStorageState).optional(), history: z.array(historySchema), favorites: z.array(favoriteSchema).max(MAX_FAVORITES).default([]) }).strict();
 const envelopeSchema = z.object({ version: z.literal(1), salt: z.string().regex(/^[a-f0-9]{32}$/), iv: z.string().regex(/^[a-f0-9]{24}$/), tag: z.string().regex(/^[a-f0-9]{32}$/), ciphertext: z.string().regex(/^[a-f0-9]+$/) }).strict();
 const aad = Buffer.from("sap-notes-web:v1");
 function derive(password: string, salt: Buffer): Promise<Buffer> {
@@ -56,6 +57,10 @@ export class Vault {
   get history(): HistoryEntry[] {
     if (!this.data || !this.key) throw locked();
     return structuredClone(this.data.history);
+  }
+  get favorites(): Favorite[] {
+    if (!this.data || !this.key) throw locked();
+    return structuredClone(this.data.favorites);
   }
   private serial<T>(fn: () => Promise<T>): Promise<T> {
     const task = this.queue.then(fn);
@@ -92,7 +97,7 @@ export class Vault {
       const key = await derive(masterSchema.parse(password), salt);
       try {
         if (epoch !== this.epoch) throw locked();
-        const data = { history: [] };
+        const data: VaultData = { history: [], favorites: [] };
         await this.write(data, key, salt, true);
         if (epoch !== this.epoch) throw locked();
         this.key = Buffer.from(key); this.salt = salt; this.data = data;

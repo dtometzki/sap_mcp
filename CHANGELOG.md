@@ -7,6 +7,16 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.13.0] – 2026-09-05
+
+### Hinzugefügt
+- Web-App: Notes über „☆ Merken“ als Favoriten speichern; bis zu 10 Stichwörter
+  und eine eigene Notiz ergänzen, bearbeiten oder entfernen.
+- Eigene Favoritenübersicht mit Textsuche, Stichwortfilter und erneutem Laden
+  des aktuellen SAP-Inhalts beim Öffnen. Bis zu 500 Favoriten, 50 pro Seite.
+- Favoriten im verschlüsselten Tresor; ältere Tresore werden ohne Verlust von
+  Zugangsdaten oder Suchverlauf geöffnet. Sperren leert auch den Bearbeitungsdialog.
+
 ## [1.12.1] – 2026-09-05
 
 ### Behoben

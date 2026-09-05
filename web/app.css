@@ -37,7 +37,7 @@ main, .search-layout > *, .settings-grid > *, .query-field, .history-query {
   .results, .note { min-height: 0; overflow: auto; }
   .results > .panel-heading { position: sticky; top: 0; z-index: 1; background: white; padding: .9rem 1.2rem; }
   .empty { padding-top: 2rem; padding-bottom: 2rem; }
-  #history-view, #settings-view { flex: 1; min-height: 0; overflow: auto; padding-bottom: 1rem; }
+  #history-view, #settings-view, #favorites-view { flex: 1; min-height: 0; overflow: auto; padding-bottom: 1rem; }
   .gate { flex: none; width: 100%; margin: 2rem auto; }
   footer { flex: none; width: 100%; gap: 1rem; margin: 0 auto; padding-top: .65rem; padding-bottom: .65rem; }
 }
@@ -77,3 +77,23 @@ main, .search-layout > *, .settings-grid > *, .query-field, .history-query {
 
 .note-body .attachment-download { border: 0; background: transparent; padding: 0; text-align: left; color: var(--blue); font: inherit; text-decoration: underline; overflow-wrap: anywhere; max-width: 100%; }
 @media print { .note-body .attachment-download { color: black; text-decoration: none; } }
+
+.tabs { flex-wrap: wrap; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.favorites-filters { flex-wrap: wrap; }
+#favorites-filter-form { max-width: none; }
+.favorites-filters input { flex: 1 1 20rem; width: auto; min-width: 0; }
+.favorites-filters select { flex: 0 1 16rem; width: auto; min-width: 0; max-width: 100%; }
+.favorite-item { display: flex; flex-wrap: wrap; gap: 1rem; padding: 1.2rem; border-bottom: 1px solid var(--border); }
+.favorite-info { flex: 1 1 18rem; min-width: 0; overflow-wrap: anywhere; }
+.favorite-open { display: block; text-align: left; border: 0; padding: 0; background: transparent; color: var(--blue); font-size: 1rem; overflow-wrap: anywhere; max-width: 100%; }
+.favorite-tags { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .6rem; }
+.favorite-tag { padding: .15rem .55rem; background: #edf4fc; font-size: .8rem; }
+.favorite-memo { white-space: pre-wrap; margin: .6rem 0 0; }
+.favorite-actions { display: flex; align-items: start; gap: .5rem; }
+#favorite-editor .panel-heading { align-items: start; }
+#favorite-editor textarea { display: block; width: 100%; min-width: 0; resize: vertical; border: 1px solid #bdcada; border-radius: 7px; padding: .7rem; font: inherit; }
+#favorite-description { overflow-wrap: anywhere; }
+#favorite-editor .button-row { margin-top: 1rem; flex-wrap: wrap; }
+#favorite-error { color: #a32020; }
+#favorites-more { margin-top: 1rem; }
