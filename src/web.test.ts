@@ -418,6 +418,37 @@ test("About retains the app version when Git metadata is unavailable", async () 
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test("printing an opened note keeps only the note, its source and a retrieval line; the button calls window.print", async t => {
+  const browser = await browserOrSkip(t); if (!browser) return;
+  const f = await fixture();
+  const page = await browser.newPage();
+  await page.addInitScript(() => { Object.assign(window, { printCalls: 0, print: () => { (window as unknown as { printCalls: number }).printCalls++; } }); });
+  try {
+    const setup = await f.request("/api/setup", "POST", { password: PASSWORD });
+    const token = setup.headers.get("set-cookie")?.split(";")[0]?.slice("sap_web=".length); assert.ok(token);
+    await page.context().addCookies([{ name: "sap_web", value: token, url: f.origin }]);
+    await f.service.check();
+    await page.goto(f.origin); await page.locator("#workspace").waitFor();
+    const defaultTitle = await page.title();
+    await page.locator("#query").fill("2170696"); await page.locator("#search-submit").click();
+    await page.locator(".note-body").waitFor();
+    assert.equal(await page.title(), "SAP Note 2170696 – HANA troubleshooting");
+    assert.equal(await page.locator(".print-meta").isVisible(), false);
+    await page.getByRole("button", { name: "Als PDF sichern" }).click();
+    assert.equal(await page.evaluate(() => (window as unknown as { printCalls: number }).printCalls), 1);
+    await page.emulateMedia({ media: "print" });
+    const display = (selector: string) => page.locator(selector).first().evaluate(element => getComputedStyle(element).display);
+    for (const hidden of [".topbar", ".tabs", ".search-form", ".results", "footer", ".print-hide", ".note-actions"]) assert.equal(await display(hidden), "none", hidden);
+    assert.notEqual(await display(".note-body"), "none");
+    assert.equal(await display(".print-meta"), "block");
+    assert.match(await page.locator(".print-meta").textContent() ?? "", /^Quelle: https:\/\/me\.sap\.com\/notes\/2170696 · Abgerufen am /);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1), true);
+    await page.emulateMedia({ media: "screen" });
+    await page.getByRole("button", { name: "Sperren", exact: true }).click(); await page.locator("#gate").waitFor();
+    assert.equal(await page.title(), defaultTitle);
+  } finally { await page.close(); await browser.close(); await f.cleanup(); }
+});
+
 test("desktop workspace fits the viewport and long notes reflow without horizontal scrolling", async t => {
   const browser = await browserOrSkip(t); if (!browser) return;
   const f = await fixture();
