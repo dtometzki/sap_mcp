@@ -3,6 +3,7 @@ import type { HistoryEntry } from "./vault.js";
 import type { SapStatus } from "./sap.js";
 import type { AppInfo } from "./about.js";
 import type { NoteAttachment } from "../attachments.js";
+import type { Favorite } from "./favorites.js";
 
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
   const found = document.getElementById(id);
@@ -22,6 +23,11 @@ let historySequence = 0;
 let historyOffset = 0;
 let historyQuery = "";
 let historyTotal = 0;
+let favoritesSequence = 0;
+let favoritesOffset = 0;
+let favoriteEditing: { number: string; title: string } | undefined;
+let favoriteEditorSequence = 0;
+let currentNote: { number: string; title: string; button: HTMLButtonElement } | undefined;
 const pending = new Set<AbortController>();
 const downloadUrls = new Set<string>();
 const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("sap-notes-web") : undefined;
@@ -29,10 +35,15 @@ channel?.addEventListener("message", (event: MessageEvent<unknown>) => { if (eve
 class ObsoleteRequest extends Error {}
 function message(text: string): void { el("message").textContent = text; el("message").hidden = !text; }
 function clearPrivateView(): void {
-  epoch++; searchSequence++; noteSequence++; historySequence++;
+  epoch++; searchSequence++; noteSequence++; historySequence++; favoritesSequence++; favoriteEditorSequence++;
   for (const controller of pending) controller.abort(); pending.clear();
   for (const url of downloadUrls) URL.revokeObjectURL(url); downloadUrls.clear();
   for (const field of document.querySelectorAll<HTMLInputElement>("input")) field.value = "";
+  el<HTMLDialogElement>("favorite-editor").close(); favoriteEditing = undefined; currentNote = undefined;
+  el<HTMLTextAreaElement>("favorite-memo").value = "";
+  el("favorite-description").textContent = ""; el("favorite-error").textContent = "";
+  el("favorites-list").replaceChildren(); el("favorites-count").textContent = "";
+  el("favorites-tag").replaceChildren(new Option("Alle Stichwörter", "")); favoritesOffset = 0;
   el("results").replaceChildren(node("p", "Starte eine Suche nach SAP Notes.", "empty"));
   el("note-content").replaceChildren(node("p", "Wähle eine Note aus der Trefferliste.", "empty"));
   document.title = DEFAULT_TITLE;
@@ -93,7 +104,7 @@ async function action(fn: () => Promise<unknown>, source?: HTMLElement): Promise
   finally { for (const button of buttons) button.disabled = false; }
 }
 function showView(next: string): void {
-  for (const name of ["search", "history", "settings"]) el(`${name}-view`).hidden = name !== next;
+  for (const name of ["search", "favorites", "history", "settings"]) el(`${name}-view`).hidden = name !== next;
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-view]")) {
     button.classList.toggle("active", button.dataset.view === next);
     if (button.dataset.view === next) button.setAttribute("aria-current", "page"); else button.removeAttribute("aria-current");
@@ -180,17 +191,95 @@ function attachmentPanel(number: string, sequence: number): { button: HTMLButton
   }, button); });
   return { button, panel };
 }
+function setFavoriteStatus(number: string, saved: boolean): void {
+  if (!currentNote || Number(currentNote.number) !== Number(number)) return;
+  currentNote.button.textContent = saved ? "★ Favorit bearbeiten" : "☆ Merken";
+  currentNote.button.setAttribute("aria-label", saved ? "Favorit bearbeiten" : "Note als Favorit merken");
+}
+async function editFavorite(number: string, title: string): Promise<void> {
+  const sequence = ++favoriteEditorSequence;
+  const { favorite } = await api<{ favorite: Favorite | null }>(`/api/favorites/${number}`);
+  if (sequence !== favoriteEditorSequence) throw new ObsoleteRequest();
+  favoriteEditing = { number, title };
+  el("favorite-editor-title").textContent = favorite ? "Favorit bearbeiten" : "Favorit merken";
+  el("favorite-description").textContent = `SAP Note ${number} · ${title}`;
+  input("favorite-tags").value = favorite?.tags.join(", ") ?? "";
+  el<HTMLTextAreaElement>("favorite-memo").value = favorite?.memo ?? "";
+  el("favorite-remove").hidden = !favorite; el("favorite-error").hidden = true;
+  const dialog = el<HTMLDialogElement>("favorite-editor"); if (!dialog.open) dialog.showModal();
+  input("favorite-tags").focus();
+}
+async function favorites(more = false): Promise<void> {
+  const sequence = ++favoritesSequence;
+  if (!more) favoritesOffset = 0;
+  const query = input("favorites-filter").value;
+  const tag = el<HTMLSelectElement>("favorites-tag").value;
+  const result = await api<{ entries: Favorite[]; total: number; tags: string[] }>(`/api/favorites?q=${encodeURIComponent(query)}&tag=${encodeURIComponent(tag)}&offset=${favoritesOffset}`);
+  if (sequence !== favoritesSequence) throw new ObsoleteRequest();
+  const select = el<HTMLSelectElement>("favorites-tag");
+  select.replaceChildren(new Option("Alle Stichwörter", ""));
+  for (const value of result.tags) select.add(new Option(value, value));
+  if (tag && !result.tags.includes(tag)) select.add(new Option(tag, tag));
+  select.value = tag;
+  const list = el("favorites-list"); if (!more) list.replaceChildren();
+  el("favorites-count").textContent = `${result.total} ${result.total === 1 ? "Favorit" : "Favoriten"}`;
+  for (const entry of result.entries) {
+    const row = node("div", undefined, "favorite-item");
+    const info = node("div", undefined, "favorite-info");
+    const open = node("button", `${entry.number} · ${entry.title}`, "favorite-open");
+    open.addEventListener("click", () => { showView("search"); void action(() => openNote(entry.number), open); });
+    info.append(open);
+    const tags = node("div", undefined, "favorite-tags");
+    for (const tag of entry.tags) {
+      const button = node("button", tag, "favorite-tag"); button.setAttribute("aria-label", `Nach ${tag} filtern`);
+      button.addEventListener("click", () => { select.value = result.tags.find(value => value.toLocaleLowerCase("de") === tag.toLocaleLowerCase("de")) ?? tag; void action(() => favorites(), button); });
+      tags.append(button);
+    }
+    info.append(tags);
+    if (entry.memo) info.append(node("p", entry.memo, "favorite-memo"));
+    const actions = node("div", undefined, "favorite-actions");
+    const edit = node("button", "Bearbeiten"); edit.setAttribute("aria-label", `Favorit ${entry.number} bearbeiten`);
+    edit.addEventListener("click", () => { void action(() => editFavorite(entry.number, entry.title), edit); });
+    actions.append(edit); row.append(info, actions); list.append(row);
+  }
+  favoritesOffset += result.entries.length; el("favorites-more").hidden = favoritesOffset >= result.total;
+  if (!result.total) list.append(node("p", query || tag ? "Keine passenden Favoriten. Ändere den Filter." : "Noch keine Favoriten. Öffne eine Note und klicke auf ☆ Merken.", "empty"));
+}
+async function saveFavorite(remove = false): Promise<void> {
+  const editing = favoriteEditing; if (!editing) return;
+  const sequence = favoriteEditorSequence;
+  const tags = input("favorite-tags").value.split(",").map(tag => tag.trim()).filter(Boolean);
+  const memo = el<HTMLTextAreaElement>("favorite-memo").value;
+  try {
+    if (!remove && (tags.length > 10 || tags.some(tag => tag.length > 40))) throw new Error("Maximal 10 Stichwörter mit jeweils 40 Zeichen verwenden.");
+    if (remove && !window.confirm("Favorit einschließlich Stichwörtern und eigener Notiz entfernen?")) return;
+    const result = await api<{ favorite: Favorite | null }>(`/api/favorites/${editing.number}`, remove ? "DELETE" : "PUT", remove ? {} : { title: editing.title, tags, memo });
+    setFavoriteStatus(editing.number, result.favorite !== null);
+    if (sequence === favoriteEditorSequence) el<HTMLDialogElement>("favorite-editor").close();
+    if (!el("favorites-view").hidden) await favorites();
+    message(remove ? "Favorit entfernt." : "Favorit verschlüsselt gespeichert.");
+  } catch (error) {
+    if (error instanceof ObsoleteRequest || sequence !== favoriteEditorSequence) return;
+    el("favorite-error").textContent = error instanceof Error ? error.message : "Favorit konnte nicht gespeichert werden.";
+    el("favorite-error").hidden = false;
+  }
+}
 async function openNote(number: string): Promise<{ id: string; title: string }> {
   if (!/^\d{4,10}$/.test(number)) throw new Error("Eine Note-Nummer besteht aus 4 bis 10 Ziffern.");
   const sequence = ++noteSequence;
+  currentNote = undefined;
   el("note-content").replaceChildren(node("p", `Note ${number} wird geladen …`, "empty"));
   try {
-    const note = await api<NoteDetail & { html: string }>(`/api/notes/${number}`);
+    const note = await api<NoteDetail & { html: string; favorite: Favorite | null }>(`/api/notes/${number}`);
     if (sequence !== noteSequence) throw new ObsoleteRequest();
     const header = node("div", undefined, "note-header");
     const actions = node("div", undefined, "note-actions");
     const attachments = attachmentPanel(number, sequence);
-    actions.append(sourceLink(note.url), printButton(), attachments.button);
+    const star = node("button");
+    currentNote = { number: note.id, title: note.title, button: star };
+    setFavoriteStatus(note.id, note.favorite !== null);
+    star.addEventListener("click", () => { void action(() => editFavorite(note.id, note.title), star); });
+    actions.append(star, sourceLink(note.url), printButton(), attachments.button);
     header.append(node("div", `SAP NOTE / KBA · ${note.id}`, "eyebrow"), node("h2", note.title), actions);
     const content = node("div", undefined, "note-body");
     // Only HTML produced by the server's HTML-disabled Markdown renderer.
@@ -255,6 +344,7 @@ for (const button of document.querySelectorAll<HTMLButtonElement>("[data-view]")
   button.addEventListener("click", () => {
     const next = button.dataset.view ?? "search"; showView(next);
     if (next === "history") void action(() => history());
+    if (next === "favorites") void action(() => favorites());
     if (next === "settings") input("username").value = state.username ?? "";
   });
 }
@@ -272,6 +362,17 @@ form("search-form", async () => {
   const query = input("query").value.trim();
   if (/^\d{4,10}$/.test(query)) { showView("search"); await openNote(query); }
   else await search(query, Number(el<HTMLSelectElement>("limit").value));
+});
+form("favorites-filter-form", () => favorites());
+click("favorites-more", () => favorites(true));
+el("favorites-tag").addEventListener("change", () => { void action(() => favorites()); });
+form("favorite-form", () => saveFavorite());
+click("favorite-remove", () => saveFavorite(true));
+el("favorite-close").addEventListener("click", () => el<HTMLDialogElement>("favorite-editor").close());
+el("favorite-editor").addEventListener("close", () => {
+  favoriteEditorSequence++; favoriteEditing = undefined;
+  input("favorite-tags").value = ""; el<HTMLTextAreaElement>("favorite-memo").value = "";
+  el("favorite-description").textContent = ""; el("favorite-error").textContent = "";
 });
 form("history-filter-form", () => history());
 click("history-more", () => history(true));

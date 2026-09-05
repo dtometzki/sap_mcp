@@ -14,6 +14,7 @@ import { loadAppInfo, type AppInfo } from "./web/about.js";
 import { SapSession, AccessDeniedError, SessionExpiredError, type SessionState, type SessionStore } from "./session.js";
 import { loadConfig } from "./config.js";
 import type { NoteHit } from "./notes.js";
+import { MAX_FAVORITES, type Favorite } from "./web/favorites.js";
 
 const PASSWORD = "master test password 123";
 const SECOND = "a different master password";
@@ -556,4 +557,165 @@ test("web attachments enforce authorization, validation, safe binary delivery an
     assert.equal(blocked.status, 401); assert.equal((await blocked.json() as { code: string }).code, "LOCKED");
     await locking;
   } finally { await f.cleanup(); }
+});
+
+test("favorites are private, validated, deduplicated, filtered and retained across restart and account changes", async () => {
+  const f = await fixture();
+  const input = { title: "SQL Collection", tags: [" HANA ", "SQL", "hana"], memo: "PRIVATE-FAVORITE-MEMO <script>bad()</script>" };
+  const path = "/api/favorites/1969700";
+  try {
+    for (const [url, method] of [["/api/favorites", "GET"], [path, "GET"], [path, "PUT"], [path, "DELETE"]]) assert.equal((await f.request(url!, method, input)).status, 401);
+    await f.request("/api/setup", "POST", { password: PASSWORD });
+    assert.equal((await f.request(path, "PUT", input, { Origin: "https://evil.example" })).status, 403);
+    assert.equal((await f.request(path, "PUT", input, { "Content-Type": "text/plain" })).status, 415);
+    for (const bad of [{ ...input, markdown: "full note" }, { ...input, tags: ["x".repeat(41)] }, { ...input, tags: Array(11).fill("tag") }, { ...input, memo: "x".repeat(2001) }, { ...input, title: "" }]) assert.equal((await f.request(path, "PUT", bad)).status, 400);
+    assert.equal((await f.request("/api/favorites/no-note", "PUT", input)).status, 400);
+    const response = await f.request(path, "PUT", input); assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    const first = (await response.json() as { favorite: Favorite }).favorite;
+    assert.deepEqual(first.tags, ["HANA", "SQL"]);
+    assert.equal(f.gateways.length, 0, "personal metadata does not need SAP login");
+    await f.request("/api/favorites/0001969700", "PUT", { ...input, tags: ["HANA", "Performance"] });
+    assert.equal(f.vault.favorites.length, 1);
+    assert.equal(f.vault.favorites[0]?.createdAt, first.createdAt);
+    assert.ok(!("markdown" in f.vault.favorites[0]));
+    const clone = f.vault.favorites; clone[0]!.memo = "tampered";
+    assert.equal(f.vault.favorites[0]?.memo, input.memo);
+    await f.request("/api/favorites/2170696", "PUT", { title: "Backup", tags: ["backup"], memo: "restore" });
+    const list = await (await f.request("/api/favorites?q=private&tag=hana")).json() as { entries: Favorite[]; total: number; tags: string[] };
+    assert.equal(list.total, 1); assert.equal(list.entries[0]?.number, "1969700");
+    assert.deepEqual(list.tags, ["backup", "HANA", "Performance"]);
+    assert.equal((await (await f.request("/api/favorites?q=no-match")).json() as { total: number }).total, 0);
+    assert.equal((await (await f.request("/api/favorites?offset=1")).json() as { entries: Favorite[] }).entries.length, 1);
+    const ciphertext = await readFile(f.path, "utf8");
+    for (const secret of [input.memo, "Performance", "1969700", "SQL Collection"]) assert.ok(!ciphertext.includes(secret));
+    const restarted = new Vault(f.path); await restarted.unlock(PASSWORD);
+    assert.equal(restarted.favorites.length, 2);
+    restarted.lock();
+    await f.request("/api/password", "PUT", { current: PASSWORD, next: SECOND });
+    await restarted.unlock(SECOND); assert.equal(restarted.favorites[1]?.memo, input.memo); restarted.lock();
+    await f.request(path, "PUT", { ...input, tags: ["HANA"] });
+    await f.request("/api/credentials", "PUT", { username: "S999", password: SAP_PASSWORD });
+    await f.request("/api/credentials", "DELETE"); await f.request("/api/history", "DELETE");
+    assert.equal(f.vault.favorites.length, 2);
+    await f.request(path, "DELETE"); assert.equal(f.vault.favorites.length, 1);
+    assert.equal((await f.request(path, "DELETE")).status, 200);
+    await f.request("/api/lock", "POST");
+    assert.throws(() => f.vault.favorites, { code: "LOCKED" });
+    await f.request("/api/unlock", "POST", { password: SECOND });
+    assert.equal(f.vault.favorites.length, 1);
+    assert.equal((await (await f.request(path)).json() as { favorite: Favorite | null }).favorite, null);
+  } finally { await f.cleanup(); }
+});
+
+test("favorite capacity preserves existing entries and lock invalidates queued edits", async () => {
+  const f = await fixture();
+  try {
+    await f.request("/api/setup", "POST", { password: PASSWORD });
+    const now = new Date().toISOString();
+    await f.vault.update(data => { data.favorites = Array.from({ length: MAX_FAVORITES }, (_, i) => ({ number: String(1000 + i), title: `Note ${i}`, tags: [], memo: "", createdAt: now, updatedAt: now })); });
+    const input = { title: "New title", tags: [], memo: "pending secret" };
+    assert.equal((await f.request("/api/favorites/9999", "PUT", input)).status, 409);
+    assert.equal(f.vault.favorites.length, MAX_FAVORITES);
+    assert.equal((await f.request("/api/favorites/1000", "PUT", input)).status, 200);
+    const before = f.vault.favorites;
+    let release!: () => void;
+    const barrier = f.service.run(() => new Promise<void>(resolve => { release = resolve; }));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    const pending = f.request("/api/favorites/1001", "PUT", input);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const locking = f.service.lock();
+    release(); await assert.rejects(barrier, { code: "LOCKED" }); await locking;
+    assert.equal((await pending).status, 401);
+    await f.vault.unlock(PASSWORD); assert.deepEqual(f.vault.favorites, before);
+  } finally { await f.cleanup(); }
+});
+
+test("legacy encrypted vaults without favorites unlock without losing credentials or history", async () => {
+  const { createCipheriv, randomBytes, scrypt: derive } = await import("node:crypto");
+  const temp = await temporary();
+  const salt = randomBytes(16); const iv = randomBytes(12);
+  const key = await new Promise<Buffer>((resolve, reject) => derive(PASSWORD, salt, 32, { N: 131072, r: 8, p: 1, maxmem: 256 * 1024 * 1024 }, (err, value) => err ? reject(err) : resolve(value)));
+  try {
+    const history = [{ id: randomUUID(), query: "legacy search", limit: 10, count: 0, at: new Date().toISOString() }];
+    const oldData = { credentials: { username: "S123", password: SAP_PASSWORD }, session: storage, history };
+    const cipher = createCipheriv("aes-256-gcm", key, iv); cipher.setAAD(Buffer.from("sap-notes-web:v1"));
+    const ciphertext = Buffer.concat([cipher.update(JSON.stringify(oldData)), cipher.final()]);
+    await writeFile(temp.path, JSON.stringify({ version: 1, salt: salt.toString("hex"), iv: iv.toString("hex"), tag: cipher.getAuthTag().toString("hex"), ciphertext: ciphertext.toString("hex") }));
+    const vault = new Vault(temp.path); await vault.unlock(PASSWORD);
+    assert.equal(vault.favorites.length, 0); assert.deepEqual(vault.history, history);
+    assert.equal(vault.snapshot().credentials?.password, SAP_PASSWORD); assert.deepEqual(vault.snapshot().session, storage);
+    await vault.update(data => { data.favorites.push({ number: "1969700", title: "SQL", tags: ["HANA"], memo: "Personal memo", createdAt: history[0]!.at, updatedAt: history[0]!.at }); });
+    vault.lock(); await vault.unlock(PASSWORD); assert.equal(vault.favorites[0]?.memo, "Personal memo");
+    assert.deepEqual(vault.history, history); vault.lock();
+  } finally { key.fill(0); await rm(temp.directory, { recursive: true, force: true }); }
+});
+
+test("browser favorites can be saved, filtered, edited, reopened fresh and removed; locking clears the editor", async t => {
+  const browser = await browserOrSkip(t); if (!browser) return;
+  const f = await fixture();
+  const page = await browser.newPage();
+  const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+  try {
+    const setup = await f.request("/api/setup", "POST", { password: PASSWORD });
+    const token = setup.headers.get("set-cookie")?.split(";")[0]?.slice("sap_web=".length); assert.ok(token);
+    await page.context().addCookies([{ name: "sap_web", value: token, url: f.origin }]);
+    await f.service.check();
+    await page.goto(f.origin); await page.locator("#workspace").waitFor();
+    await page.locator("#query").fill("1969700"); await page.locator("#search-submit").click();
+    await page.getByRole("button", { name: "Note als Favorit merken", exact: true }).click();
+    await page.getByLabel("Stichwörter", { exact: true }).fill("HANA, SQL, hana");
+    await page.getByLabel("Eigene Notiz (optional)").fill("PRIVATE-MEMO <script>alert(1)</script>");
+    await page.getByRole("button", { name: "Favorit speichern", exact: true }).click();
+    await page.locator("#favorite-editor").waitFor({ state: "hidden" });
+    await page.getByRole("button", { name: "Favorit bearbeiten", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Favoriten", exact: true }).click();
+    await page.locator(".favorite-item").waitFor();
+    assert.equal(await page.locator(".favorite-item").count(), 1);
+    assert.equal(await page.locator(".favorite-tag").count(), 2);
+    assert.equal(await page.locator(".favorite-memo").textContent(), "PRIVATE-MEMO <script>alert(1)</script>");
+    assert.equal(await page.locator(".favorite-item script").count(), 0);
+    await page.locator("#favorites-filter").fill("no-match"); await page.locator("#favorites-filter-form button").click();
+    await page.getByText("Keine passenden Favoriten. Ändere den Filter.", { exact: true }).waitFor();
+    await page.locator("#favorites-filter").fill("private-memo"); await page.locator("#favorites-filter-form button").click();
+    await page.locator(".favorite-item").waitFor();
+    await page.getByRole("button", { name: "Nach HANA filtern", exact: true }).click();
+    await page.waitForFunction(() => (document.getElementById("favorites-tag") as HTMLSelectElement).value === "HANA");
+    await page.getByRole("button", { name: "Favorit 1969700 bearbeiten", exact: true }).click();
+    await page.locator("#favorite-tags").fill("x".repeat(41));
+    await page.locator("#favorite-save").click(); await page.locator("#favorite-error").waitFor();
+    await page.locator("#favorite-tags").fill("HANA, Performance");
+    await page.locator("#favorite-memo").fill("Updated personal memo");
+    await page.locator("#favorite-save").click(); await page.locator("#favorite-editor").waitFor({ state: "hidden" });
+    await page.locator("#favorites-filter").fill(""); await page.locator("#favorites-filter-form button").click();
+    await page.getByText("Updated personal memo", { exact: true }).waitFor();
+    await page.reload(); await page.locator("#workspace").waitFor();
+    await page.getByRole("button", { name: "Favoriten", exact: true }).click();
+    await page.getByText("Updated personal memo", { exact: true }).waitFor();
+    const gateway = f.gateways[0]; assert.ok(gateway);
+    gateway.note = async number => ({ id: number, title: "Fresh SAP title", url: `https://me.sap.com/notes/${number}`, markdown: "# Solution\n\nFresh content from SAP" });
+    await page.locator(".favorite-open").click();
+    await page.getByRole("heading", { name: "Fresh SAP title", exact: true }).waitFor();
+    await page.getByText("Fresh content from SAP", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Favorit bearbeiten", exact: true }).click();
+    await page.locator("#favorite-editor").waitFor();
+    assert.equal(await page.locator("#favorite-memo").inputValue(), "Updated personal memo");
+    // Another browser locks while this editor contains unsaved private text.
+    await page.locator("#favorite-memo").fill("Unsaved secret");
+    await f.request("/api/lock", "POST");
+    await page.locator("#favorite-editor").waitFor({ state: "hidden", timeout: 10000 });
+    assert.equal(await page.locator("#favorite-memo").inputValue(), "");
+    assert.equal(await page.locator("#favorites-list").textContent(), "");
+    await page.locator("#master").fill(PASSWORD); await page.getByRole("button", { name: "Entsperren", exact: true }).click();
+    await page.locator("#workspace").waitFor();
+    await page.getByRole("button", { name: "Favoriten", exact: true }).click();
+    await page.getByRole("button", { name: "Favorit 1969700 bearbeiten", exact: true }).click();
+    await page.locator("#favorite-editor").waitFor();
+    assert.equal(await page.locator("#favorite-memo").inputValue(), "Updated personal memo");
+    page.once("dialog", dialog => { void dialog.accept(); });
+    await page.locator("#favorite-remove").click(); await page.locator("#favorite-editor").waitFor({ state: "hidden" });
+    await page.getByText("Noch keine Favoriten. Öffne eine Note und klicke auf ☆ Merken.", { exact: true }).waitFor();
+    assert.equal(f.vault.favorites.length, 0);
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); await browser.close(); await f.cleanup(); }
 });

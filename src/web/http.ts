@@ -8,6 +8,7 @@ import { type WebService } from "./sap.js";
 import { renderNote } from "./markdown.js";
 import { loadAppInfo } from "./about.js";
 import { sanitizeFileName } from "../attachments.js";
+import { favoriteInputSchema, favoriteNumberSchema, filterFavorites, MAX_FAVORITES } from "./favorites.js";
 
 const searchSchema = z.object({ query: z.string().trim().min(2).max(500), limit: z.number().int().min(1).max(25).default(10) }).strict();
 const numberSchema = z.string().regex(/^\d{4,10}$/);
@@ -184,7 +185,33 @@ export function createWebServer(service: WebService, options: WebServerOptions =
         json(response, 200, { unlocked: false }); return;
       }
       let result: unknown;
-      if (path === "/api/attachments/list" && method === "POST") {
+      if (path === "/api/favorites" && method === "GET") {
+        const query = z.string().max(500).parse(url.searchParams.get("q") ?? "");
+        const tag = z.string().max(40).parse(url.searchParams.get("tag") ?? "");
+        const offset = z.coerce.number().int().min(0).parse(url.searchParams.get("offset") ?? 0);
+        const all = service.vault.favorites;
+        const entries = filterFavorites(all, query, tag);
+        const tags = new Map<string, string>();
+        for (const entry of all) for (const value of entry.tags) tags.set(value.toLocaleLowerCase("de"), value);
+        result = { entries: entries.slice(offset, offset + 50), total: entries.length, tags: [...tags.values()].sort((a, b) => a.localeCompare(b, "de")) };
+      } else if (path.startsWith("/api/favorites/") && ["GET", "PUT", "DELETE"].includes(method)) {
+        const number = favoriteNumberSchema.parse(path.slice("/api/favorites/".length));
+        if (method === "GET") result = { favorite: service.vault.favorites.find(entry => entry.number === number) ?? null };
+        else {
+          const raw = await authorizedBody();
+          const input = method === "PUT" ? favoriteInputSchema.parse(raw) : undefined;
+          await service.run(() => service.vault.update(data => {
+            const existing = data.favorites.find(entry => entry.number === number);
+            if (input) {
+              if (!existing && data.favorites.length >= MAX_FAVORITES) throw new WebError("FAVORITES_FULL", `Maximal ${MAX_FAVORITES} Favoriten. Bitte zuerst einen Favoriten entfernen.`, 409);
+              const now = new Date().toISOString();
+              data.favorites = data.favorites.filter(entry => entry.number !== number);
+              data.favorites.unshift({ ...input, number, createdAt: existing?.createdAt ?? now, updatedAt: now });
+            } else data.favorites = data.favorites.filter(entry => entry.number !== number);
+          }));
+          result = { favorite: service.vault.favorites.find(entry => entry.number === number) ?? null };
+        }
+      } else if (path === "/api/attachments/list" && method === "POST") {
         const { number } = attachmentListSchema.parse(await authorizedBody());
         result = { attachments: await service.attachments(number) };
       } else if (path === "/api/attachments/download" && method === "POST") {
@@ -208,7 +235,8 @@ export function createWebServer(service: WebService, options: WebServerOptions =
         result = { hits: await service.search(input.query, input.limit) };
       } else if (path.startsWith("/api/notes/") && method === "GET") {
         const note = await service.note(numberSchema.parse(path.slice("/api/notes/".length)));
-        result = { ...note, html: renderNote(note.markdown) };
+        const number = favoriteNumberSchema.parse(note.id);
+        result = { ...note, html: renderNote(note.markdown), favorite: service.vault.favorites.find(entry => entry.number === number) ?? null };
       } else if (path === "/api/credentials" && (method === "PUT" || method === "DELETE")) {
         const input = await authorizedBody();
         await service.credentials(method === "PUT" ? credentialsSchema.parse(input) : undefined);
