@@ -7,6 +7,20 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.10.0] – 2026-09-05
+
+### Hinzugefügt
+- Web-App im Hintergrund: `npm run web:start` startet den Server abgekoppelt vom
+  Terminal (Ausgabe in `web.log` im Datenverzeichnis, Rechte `0600`) und meldet
+  erst Erfolg, wenn er auf dem Port antwortet; `npm run web:stop` beendet ihn über
+  die PID aus `server.lock` (Tresor wird dabei gesperrt); `npm run web:status`
+  zeigt den Zustand. `npm run web` bleibt der Vordergrund-Start.
+
+### Behoben
+- Web-App: Ist der Port beim Start bereits belegt (`EADDRINUSE`) oder nicht
+  erlaubt (`EACCES`), nennt die Startmeldung Port und Ursache statt des
+  generischen „Operation failed“. Andere Startfehler bleiben wie bisher maskiert.
+
 ## [1.9.0] – 2026-09-05
 
 ### Hinzugefügt

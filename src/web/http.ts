@@ -37,6 +37,22 @@ function json(response: ServerResponse, status: number, data: unknown): void {
   response.end(JSON.stringify(data));
 }
 
+/**
+ * A refused port carries no credentials, but the generic safeErrorMessage() hides it —
+ * and a local CLI that fails to start must say why. Only the listen error codes with a
+ * known cause are named; everything else stays masked.
+ */
+export function describeListenError(error: unknown, port: number): unknown {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === "EADDRINUSE") {
+    return new WebError("PORT_IN_USE", `Port ${port} ist bereits belegt (z. B. durch eine noch laufende SAP-Notes-Web-App mit anderem Datenverzeichnis oder ein anderes Programm). Prozess beenden oder SAP_WEB_PORT ändern.`);
+  }
+  if (code === "EACCES") {
+    return new WebError("PORT_FORBIDDEN", `Port ${port} darf von diesem Benutzer nicht geöffnet werden. SAP_WEB_PORT auf einen Wert ab 1024 setzen.`);
+  }
+  return error;
+}
+
 export interface WebServerOptions {
   /**
    * Lock the vault after this many milliseconds without an authenticated request.
