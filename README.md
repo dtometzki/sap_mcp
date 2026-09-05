@@ -131,6 +131,9 @@ des Terminals, nicht aber Abmelden oder Neustart des Rechners – danach erneut
    Minuten Zeitüberschreitung schließen das Anmeldefenster.
 4. Nach Fehlermeldung, Produkt oder Problem suchen (2–500 Zeichen; 1–25 Treffer,
    Standard 10), oder eine Note direkt über ihre 4–10-stellige Nummer öffnen.
+   **Als PDF sichern** in der Note-Ansicht öffnet den Druckdialog des Browsers
+   (macOS: „Als PDF sichern“); gedruckt wird nur die Note mit Quelle und
+   Abrufzeitpunkt, der vorgeschlagene Dateiname ist „SAP Note <Nr> – <Titel>“.
 5. Im **Suchverlauf** erfolgreiche Suchen einschließlich null Treffern erneut
    ausführen, filtern oder löschen. Gespeichert werden Suchtext, Zeitpunkt,
    Trefferlimit und Trefferzahl. Fehler und direkt geöffnete Notes erscheinen

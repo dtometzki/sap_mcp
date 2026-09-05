@@ -7,6 +7,16 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.11.0] – 2026-09-05
+
+### Hinzugefügt
+- Web-App: „Als PDF sichern“ in der Note-Ansicht öffnet den Druckdialog des
+  Browsers (macOS: „Als PDF sichern“). Ein Druck-Stylesheet gibt nur die Note
+  aus – Nummer, Titel, Inhalt, Link-Ziele in Klammern sowie eine Fußzeile mit
+  Quelle und Abrufzeitpunkt; Kopfzeile, Suche, Trefferliste und Footer entfallen.
+  Der Fenstertitel lautet bei geöffneter Note „SAP Note <Nr> – <Titel>“ und
+  dient als Dateiname-Vorschlag.
+
 ## [1.10.0] – 2026-09-05
 
 ### Hinzugefügt

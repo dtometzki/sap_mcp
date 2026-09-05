@@ -32,6 +32,7 @@ function clearPrivateView(): void {
   for (const field of document.querySelectorAll<HTMLInputElement>("input")) field.value = "";
   el("results").replaceChildren(node("p", "Starte eine Suche nach SAP Notes.", "empty"));
   el("note-content").replaceChildren(node("p", "Wähle eine Note aus der Trefferliste.", "empty"));
+  document.title = DEFAULT_TITLE;
   el("history-list").replaceChildren(); el("result-count").textContent = "0";
   historyOffset = 0; historyTotal = 0; historyQuery = "";
   state.unlocked = false;
@@ -98,6 +99,23 @@ function form(id: string, fn: () => Promise<unknown>): void {
   const target = el<HTMLFormElement>(id);
   target.addEventListener("submit", event => { event.preventDefault(); void action(fn, target); });
 }
+const DEFAULT_TITLE = document.title;
+/** Print-only footer line: the source URL and retrieval time survive on paper, links do not. */
+function printMeta(url: string): HTMLParagraphElement {
+  const meta = node("p", `Quelle: ${url} · Abgerufen am ${new Date().toLocaleString("de-DE")}`, "print-meta");
+  return meta;
+}
+/**
+ * Variant A of "save as PDF": the browser's print dialog with a print stylesheet that
+ * keeps only the note. macOS offers "Als PDF sichern" there; document.title becomes the
+ * suggested file name.
+ */
+function printButton(): HTMLButtonElement {
+  const button = node("button", "Als PDF sichern", "print-hide");
+  button.type = "button";
+  button.addEventListener("click", () => window.print());
+  return button;
+}
 function sourceLink(url: string): HTMLAnchorElement {
   const link = node("a", "Bei SAP öffnen ↗");
   try { const parsed = new URL(url); if (parsed.protocol === "https:") link.href = parsed.href; } catch { /* No unsafe URLs. */ }
@@ -111,11 +129,14 @@ async function openNote(number: string): Promise<{ id: string; title: string }> 
     const note = await api<NoteDetail & { html: string }>(`/api/notes/${number}`);
     if (sequence !== noteSequence) throw new ObsoleteRequest();
     const header = node("div", undefined, "note-header");
-    header.append(node("div", `SAP NOTE / KBA · ${note.id}`, "eyebrow"), node("h2", note.title), sourceLink(note.url));
+    const actions = node("div", undefined, "note-actions");
+    actions.append(sourceLink(note.url), printButton());
+    header.append(node("div", `SAP NOTE / KBA · ${note.id}`, "eyebrow"), node("h2", note.title), actions);
     const content = node("div", undefined, "note-body");
     // Only HTML produced by the server's HTML-disabled Markdown renderer.
     content.innerHTML = note.html;
-    el("note-content").replaceChildren(header, content);
+    el("note-content").replaceChildren(header, content, printMeta(note.url));
+    document.title = `SAP Note ${note.id} – ${note.title}`;
     for (const hit of document.querySelectorAll<HTMLButtonElement>(".result")) hit.classList.toggle("selected", hit.dataset.number === number);
     return { id: note.id, title: note.title };
   } catch (error) {
