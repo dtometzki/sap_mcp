@@ -110,9 +110,18 @@ Sie läuft für **eine Person mit einem SAP-Konto auf demselben Rechner**.
 ```bash
 npm install
 npx playwright install chromium
-npm run web
+npm run web:start     # im Hintergrund, Terminal bleibt frei
 # http://127.0.0.1:3210 im Browser öffnen
+npm run web:status    # läuft? PID und Adresse
+npm run web:stop      # beenden, Tresor wird gesperrt
 ```
+
+`npm run web` startet den Server stattdessen im Vordergrund (Strg+C beendet ihn).
+Der Hintergrundstart schreibt die Ausgabe nach `web.log` im Datenverzeichnis und
+meldet erst Erfolg, wenn der Server auf dem Port antwortet. Er überlebt das Schließen
+des Terminals, nicht aber Abmelden oder Neustart des Rechners – danach erneut
+`npm run web:start`. `web:stop` und `web:status` nutzen dieselben Variablen
+`SAP_WEB_PORT`/`SAP_WEB_DATA_DIR` wie der Start (aus `.env` oder der Umgebung).
 
 1. Beim ersten Aufruf ein **Master-Passwort mit mindestens 12 Zeichen** festlegen.
 2. Unter **Einstellungen** SAP-Benutzer und SAP-Passwort verschlüsselt speichern.
@@ -151,7 +160,7 @@ Installation ohne Git-Metadaten steht beim Commit „Nicht verfügbar“.
 | Variable | Default | Zweck |
 |---|---|---|
 | `SAP_WEB_PORT` | `3210` | Lokaler HTTP-Port, 1–65535. Ist der Port belegt, bricht der Start mit einer entsprechenden Meldung ab |
-| `SAP_WEB_DATA_DIR` | `~/.sap-notes-web` | Datenverzeichnis mit `vault.enc` und Prozess-Sperrdatei `server.lock` |
+| `SAP_WEB_DATA_DIR` | `~/.sap-notes-web` | Datenverzeichnis mit `vault.enc`, Prozess-Sperrdatei `server.lock` und `web.log` des Hintergrundstarts |
 | `SAP_WEB_IDLE_LOCK_MS` | `1800000` | Tresor nach Inaktivität sperren, alle Browser-Sitzungen abmelden (0 = deaktiviert) |
 
 Nur die exakte Adresse `http://127.0.0.1:<Port>` wird akzeptiert, kein Netzwerkzugriff,

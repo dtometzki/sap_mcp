@@ -1,29 +1,29 @@
-import { homedir } from "node:os";
-import { resolve, join } from "node:path";
+import { join } from "node:path";
 import { mkdir, open, readFile, rm } from "node:fs/promises";
-import { loadConfig, expandHomePath, intFromEnv } from "../config.js";
+import { loadConfig, intFromEnv } from "../config.js";
 import { loadDotEnv, scrubCredentialsFromEnv } from "../env.js";
 import { safeErrorMessage } from "../errors.js";
 import { Vault, WebError } from "./vault.js";
 import { BrowserSapGateway, WebService } from "./sap.js";
 import { createWebServer, describeListenError } from "./http.js";
+import { parseLockPid, webDataDirectory, webLockPath, webPort } from "./paths.js";
 
 async function main(): Promise<void> {
   loadDotEnv();
   // Explicitly exclude legacy credentials from web configuration and browser environment.
   scrubCredentialsFromEnv();
   const config = { ...loadConfig(), username: undefined, password: undefined, autoLoginEnabled: true };
-  const port = intFromEnv("SAP_WEB_PORT", 3210, 1, 65535);
+  const port = webPort();
   const idleLockMs = intFromEnv("SAP_WEB_IDLE_LOCK_MS", 30 * 60_000, 0);
-  const directory = resolve(expandHomePath(process.env.SAP_WEB_DATA_DIR ?? join(homedir(), ".sap-notes-web")));
+  const directory = webDataDirectory();
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  const lockPath = join(directory, "server.lock");
+  const lockPath = webLockPath(directory);
   const acquire = async () => {
     try { return await open(lockPath, "wx", 0o600); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const pid = Number(await readFile(lockPath, "utf8"));
-      if (!Number.isSafeInteger(pid) || pid <= 0) throw new WebError("ALREADY_RUNNING", "Sperrdatei prüfen: server.lock im Web-Datenverzeichnis.");
+      const pid = parseLockPid(await readFile(lockPath, "utf8"));
+      if (pid === undefined) throw new WebError("ALREADY_RUNNING", "Sperrdatei prüfen: server.lock im Web-Datenverzeichnis.");
       try { process.kill(pid, 0); }
       catch (probe) {
         if ((probe as NodeJS.ErrnoException).code === "ESRCH") {

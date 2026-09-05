@@ -381,6 +381,33 @@ test("a busy or forbidden port is reported by name; other listen errors stay mas
   const other = new Error("cookie secret in message"); assert.equal(describeListenError(other, 3210), other);
 });
 
+test("web:start detaches a healthy server, is idempotent, and web:stop ends it and clears the lock", async () => {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const { createServer } = await import("node:net");
+  const run = promisify(execFile);
+  const temp = await temporary();
+  const port = await new Promise<number>((resolve, reject) => { const probe = createServer(); probe.once("error", reject); probe.listen(0, "127.0.0.1", () => { const address = probe.address(); probe.close(() => resolve(typeof address === "object" && address ? address.port : 0)); }); });
+  const daemon = new URL("./web/daemon.js", import.meta.url).pathname;
+  const env = { ...process.env, SAP_WEB_DATA_DIR: temp.directory, SAP_WEB_PORT: String(port), SAP_ENV_FILE: join(temp.directory, "no.env") };
+  try {
+    const started = await run(process.execPath, [daemon, "start"], { env });
+    assert.match(started.stdout, new RegExp(`gestartet \\(PID \\d+\\): http://127\\.0\\.0\\.1:${port}`));
+    const lock = await readFile(join(temp.directory, "server.lock"), "utf8"); assert.match(lock, /^\d+$/);
+    assert.equal((await stat(join(temp.directory, "web.log"))).mode & 0o777, 0o600);
+    assert.equal((await fetch(`http://127.0.0.1:${port}/api/state`)).status, 200);
+    assert.match((await run(process.execPath, [daemon, "start"], { env })).stdout, /läuft bereits/);
+    assert.match((await run(process.execPath, [daemon, "status"], { env })).stdout, /läuft \(PID/);
+    assert.match((await run(process.execPath, [daemon, "stop"], { env })).stdout, /beendet/);
+    await assert.rejects(stat(join(temp.directory, "server.lock")), { code: "ENOENT" });
+    await assert.rejects(fetch(`http://127.0.0.1:${port}/api/state`));
+    assert.match((await run(process.execPath, [daemon, "stop"], { env })).stdout, /läuft nicht/);
+  } finally {
+    try { const pid = Number(await readFile(join(temp.directory, "server.lock"), "utf8")); if (pid > 0) process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    await rm(temp.directory, { recursive: true, force: true });
+  }
+});
+
 test("About retains the app version when Git metadata is unavailable", async () => {
   const { directory } = await temporary();
   try {
