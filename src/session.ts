@@ -165,6 +165,14 @@ export interface StartOptions {
   ignoreStoredState?: boolean;
 }
 
+export type SessionState = Awaited<ReturnType<BrowserContext["storageState"]>>;
+
+/** Injectable persistence; web sessions never pass through a plaintext file. */
+export interface SessionStore {
+  load(): Promise<SessionState | undefined>;
+  save(state: SessionState): Promise<void>;
+}
+
 /**
  * Owns the Playwright browser and the authenticated context.
  * One instance per process; the MCP server keeps it alive between tool calls
@@ -179,6 +187,7 @@ export class SapSession {
   constructor(
     private readonly config: Config,
     private readonly headless: boolean,
+    private readonly store?: SessionStore,
   ) {}
 
   /**
@@ -196,7 +205,10 @@ export class SapSession {
   private async doStart({ allowMissingState, ignoreStoredState }: StartOptions): Promise<void> {
     if (this.context) return;
 
-    const hasState = !ignoreStoredState && (await hasUsableState(this.config.storageStatePath));
+    const stored = !ignoreStoredState && this.store ? await this.store.load() : undefined;
+    const hasState = !ignoreStoredState && (this.store
+      ? stored !== undefined && isUsableStorageState(stored)
+      : await hasUsableState(this.config.storageStatePath));
     if (!hasState && this.headless && !allowMissingState) {
       throw new SessionExpiredError();
     }
@@ -204,7 +216,7 @@ export class SapSession {
     this.browser = await chromium.launch({ headless: this.headless });
     try {
       this.context = await this.browser.newContext({
-        storageState: hasState ? this.config.storageStatePath : undefined,
+        storageState: hasState ? (this.store ? stored : this.config.storageStatePath) : undefined,
         viewport: { width: 1440, height: 900 },
         locale: "en-US",
         // Tool downloads go through fetchAllowedAttachment, not the browser.
@@ -278,6 +290,10 @@ export class SapSession {
    */
   async saveState(): Promise<void> {
     if (!this.context) throw new Error("Session not started");
+    if (this.store) {
+      await this.store.save(await this.context.storageState());
+      return;
+    }
     const target = this.config.storageStatePath;
     await mkdir(dirname(target), { recursive: true, mode: 0o700 });
 

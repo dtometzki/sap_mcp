@@ -241,3 +241,13 @@ test("a transient re-login failure is retried again only after the cooldown", as
   await runner.execute(failing, String);
   assert.equal(logins, 2);
 });
+
+test("executeValue returns typed data and propagates original errors without parsing MCP text", async () => {
+  const { deps } = createDeps();
+  const runner = new ToolRunner(deps, { idleTimeoutMs: 0, stateSaveIntervalMs: 0 });
+  const value = { id: "2170696", title: "HANA" };
+  assert.equal(await runner.executeValue(async () => value), value);
+  const error = new AccessDeniedError("Note");
+  await assert.rejects(runner.executeValue(async () => { throw error; }), candidate => candidate === error);
+  await runner.shutdown(1000);
+});

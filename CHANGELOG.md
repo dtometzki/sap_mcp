@@ -7,6 +7,49 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.8.1] – 2026-09-04
+
+### Behoben
+- Desktop-Arbeitsbereich passt sich der Fensterhöhe an: Kopfzeile, Suche und
+  Footer mit About bleiben sichtbar; Trefferlisten und Notes scrollen intern.
+- Lange technische Begriffe, Codezeilen und Tabellen werden innerhalb der
+  verfügbaren Breite umgebrochen statt die Seite horizontal zu vergrößern.
+- Auf kleinen Fenstern bleibt die einspaltige, vertikal scrollbare Ansicht erhalten.
+
+## [1.8.0] – 2026-09-04
+
+### Hinzugefügt
+- About-Link im Footer mit App-Name, Version und letztem Git-Commit inklusive
+  Nachricht und Datum. Auch bei gesperrtem Tresor verfügbar; ohne Git-Metadaten
+  werden Name und Version weiterhin angezeigt.
+
+## [1.7.1] – 2026-09-04
+
+### Behoben
+- Note-Inhalte werden anhand ihrer fachlichen Abschnitte statt des größten
+  Seitencontainers extrahiert. SAP-Navigation, Werkzeugleisten, Sprachauswahl
+  und Logo-Datenlinks erscheinen nicht mehr im Note-Text.
+- Die Extraktion wartet auf den asynchron geladenen Note-Inhalt und behandelt
+  eine reine Portal-Oberfläche nicht mehr als erfolgreiche Note-Antwort.
+- Tabellen bleiben als Markdown-Tabellen erhalten; relative Referenzlinks werden
+  zu vollständigen URLs aufgelöst und doppelte Note-Nummern im Titel entfernt.
+
+## [1.7.0] – 2026-09-04
+
+### Hinzugefügt
+- Lokale deutsche SAP-Notes-Web-App (`npm run web`) mit Suche, Note-Ansicht,
+  verschlüsselter Zugangsdatenverwaltung und filterbarem, löschbarem Suchverlauf.
+- Master-Passwort-Tresor für Zugangsdaten, SAP-Session und Verlauf mit AES-256-GCM,
+  scrypt und atomarer Speicherung; getrennt von bestehenden MCP-Dateien.
+- Automatischer SAP-Login und sichtbarer MFA-Login aus der App; manuelles Sperren,
+  Passwortwechsel, Loopback-Zugriffsschutz und begrenzte Entsperrversuche.
+- Optionale WebMCP-Aktionen für Suche und Note-Ansicht, sowie Offline-Tests für
+  Verschlüsselung, HTTP-Sicherheit, Session-Isolation und den Browser-Ablauf.
+
+### Geändert
+- Gemeinsame SAP-Session unterstützt austauschbare Speicherung; ToolRunner bietet
+  typisierte Ergebnisse für den HTTP-Transport bei unverändertem MCP-Verhalten.
+
 ## [1.6.2] – 2026-09-04
 
 ### Behoben

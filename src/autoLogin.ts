@@ -1,7 +1,7 @@
 import { PublicError } from "./errors.js";
 import type { Page } from "playwright";
 import type { Config } from "./config.js";
-import { SapSession, looksLikeLoginPage } from "./session.js";
+import { SapSession, looksLikeLoginPage, type SessionStore } from "./session.js";
 import { isAllowedLoginUrl } from "./urls.js";
 
 /**
@@ -204,10 +204,16 @@ export async function performAutoLogin(
   config: Config,
   credentials: Credentials,
   headless = true,
+  store?: SessionStore,
+  signal?: AbortSignal,
 ): Promise<void> {
-  const session = new SapSession(config, headless);
+  const session = new SapSession(config, headless, store);
+  const abort = (): void => { void session.close().catch(() => undefined); };
+  signal?.addEventListener("abort", abort, { once: true });
   try {
+    signal?.throwIfAborted();
     await session.start({ allowMissingState: true, ignoreStoredState: true });
+    signal?.throwIfAborted();
     const page = await session.newPage();
     await page.goto(config.sessionProbeUrl, { waitUntil: "domcontentloaded" });
     // fillLoginForm re-checks the (possibly redirected) URL before each keystroke.
@@ -220,8 +226,10 @@ export async function performAutoLogin(
           "authenticated.",
       );
     }
+    signal?.throwIfAborted();
     await session.saveState();
   } finally {
+    signal?.removeEventListener("abort", abort);
     await session.close().catch(() => undefined);
   }
 }

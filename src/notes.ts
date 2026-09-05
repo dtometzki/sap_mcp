@@ -1,6 +1,6 @@
 import { PublicError, safeErrorMessage } from "./errors.js";
 import { rejectApiRedirect } from "./api.js";
-import TurndownService from "turndown";
+import { extractNoteDocument, noteHtmlToMarkdown } from "./noteContent.js";
 import type { Page } from "playwright";
 import { z } from "zod";
 import { buildUrl, type Config } from "./config.js";
@@ -53,14 +53,6 @@ export interface NoteDetail {
   url: string;
   markdown: string;
 }
-
-const turndown = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced" });
-turndown.remove(["script", "style", "noscript"]);
-turndown.addRule("stripJavascriptLinks", {
-  filter: (node) =>
-    node.nodeName === "A" && /^javascript:/i.test(node.getAttribute("href") ?? ""),
-  replacement: (content) => content,
-});
 
 /**
  * Wraps portal-sourced text so an MCP client treats it as data, not instructions.
@@ -397,25 +389,6 @@ export async function searchNotesViaDom(
   return session.withOpenPage(url, (page) => collectHits(page, limit));
 }
 
-/** Picks the densest plausible content container, falling back to the whole body. */
-async function extractMainHtml(page: Page): Promise<string> {
-  return page.evaluate(() => {
-    const candidates = [
-      ...document.querySelectorAll("main, article, [role='main'], .sapMPage, #content"),
-    ];
-    let best: Element = document.body;
-    let bestLength = 0;
-    for (const candidate of candidates) {
-      const length = (candidate.textContent ?? "").length;
-      if (length > bestLength) {
-        best = candidate;
-        bestLength = length;
-      }
-    }
-    return best.innerHTML;
-  });
-}
-
 export async function fetchNote(
   session: SapSession,
   config: Config,
@@ -424,8 +397,21 @@ export async function fetchNote(
   const url = buildUrl(config.noteUrlTemplate, { id });
   return withRetry(async () =>
     session.withOpenPage(url, async (page) => {
-      const html = await extractMainHtml(page);
-      const markdown = turndown.turndown(html).replace(/\n{3,}/g, "\n\n").trim();
+      // SAP renders its navigation before the document. Wait for real note sections.
+      const handle = await page.waitForFunction(extractNoteDocument, id, {
+        timeout: config.navigationTimeoutMs,
+        polling: 200,
+      }).catch(() => {
+        if (looksLikeLoginPage(page.url())) throw new SessionExpiredError();
+        throw new PublicError(
+          `Note ${id} returned no readable document sections. The portal may still be ` +
+          "loading, access may be restricted, or the document layout has changed.",
+        );
+      });
+      let html: string;
+      try { html = (await handle.jsonValue()) ?? ""; }
+      finally { await handle.dispose(); }
+      const markdown = noteHtmlToMarkdown(html);
 
       if (markdown.length < 50) {
         throw new PublicError(
@@ -435,7 +421,7 @@ export async function fetchNote(
       }
 
       const rawTitle = await page.title();
-      const title = rawTitle.replace(/\s*[-|]\s*SAP.*$/i, "").trim() || `SAP Note ${id}`;
+      const title = rawTitle.replace(/\s*[-|]\s*SAP.*$/i, "").replace(/^\d{4,10}\s*[-–—:]\s*/, "").trim() || `SAP Note ${id}`;
 
       return { id, title, url, markdown };
     }),

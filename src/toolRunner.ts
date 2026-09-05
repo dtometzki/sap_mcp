@@ -202,6 +202,19 @@ export class ToolRunner {
     { persistState = true }: ExecuteOptions = {},
   ): Promise<ToolResponse> {
     try {
+      const result = await this.executeValue(operation, { persistState });
+      return { content: [{ type: "text", text: format(result) }] };
+    } catch (error) {
+      return { isError: true, content: [{ type: "text", text: toErrorText(error) }] };
+    }
+  }
+
+  /** Same lifecycle as MCP, with typed results and errors for other transports. */
+  async executeValue<T>(
+    operation: () => Promise<T>,
+    { persistState = true }: ExecuteOptions = {},
+  ): Promise<T> {
+    try {
       const result = await this.runSerialized(async () => {
         try {
           return await this.runOnce(operation, persistState);
@@ -213,10 +226,10 @@ export class ToolRunner {
           return await this.runOnce(operation, persistState);
         }
       });
-      return { content: [{ type: "text", text: format(result) }] };
+      return result;
     } catch (error) {
       await this.recoverFromError(error);
-      return { isError: true, content: [{ type: "text", text: toErrorText(error) }] };
+      throw error;
     } finally {
       this.scheduleIdleClose();
     }
