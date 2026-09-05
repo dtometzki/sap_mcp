@@ -2,6 +2,7 @@ import type { NoteHit, NoteDetail } from "../notes.js";
 import type { HistoryEntry } from "./vault.js";
 import type { SapStatus } from "./sap.js";
 import type { AppInfo } from "./about.js";
+import type { NoteAttachment } from "../attachments.js";
 
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
   const found = document.getElementById(id);
@@ -22,6 +23,7 @@ let historyOffset = 0;
 let historyQuery = "";
 let historyTotal = 0;
 const pending = new Set<AbortController>();
+const downloadUrls = new Set<string>();
 const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("sap-notes-web") : undefined;
 channel?.addEventListener("message", (event: MessageEvent<unknown>) => { if (event.data === "locked") clearPrivateView(); });
 class ObsoleteRequest extends Error {}
@@ -29,6 +31,7 @@ function message(text: string): void { el("message").textContent = text; el("mes
 function clearPrivateView(): void {
   epoch++; searchSequence++; noteSequence++; historySequence++;
   for (const controller of pending) controller.abort(); pending.clear();
+  for (const url of downloadUrls) URL.revokeObjectURL(url); downloadUrls.clear();
   for (const field of document.querySelectorAll<HTMLInputElement>("input")) field.value = "";
   el("results").replaceChildren(node("p", "Starte eine Suche nach SAP Notes.", "empty"));
   el("note-content").replaceChildren(node("p", "Wähle eine Note aus der Trefferliste.", "empty"));
@@ -53,12 +56,14 @@ function renderState(): void {
   el("login-finish").hidden = state.sap !== "interactive"; el("login-cancel").hidden = state.sap !== "interactive";
   el("login-help").textContent = state.sap === "interactive" ? "Schließe die Anmeldung im geöffneten SAP-Fenster ab und klicke dann auf „Anmeldung prüfen“." : "Zugangsdaten in den Einstellungen hinterlegen oder die Anmeldung im SAP-Fenster abschließen.";
 }
-async function api<T>(path: string, method = "GET", data?: unknown): Promise<T> {
+async function api<T>(path: string, method = "GET", data?: unknown, binary = false): Promise<T> {
   const atStart = epoch;
   const controller = new AbortController(); pending.add(controller);
   try {
     const response = await fetch(path, { method, credentials: "same-origin", cache: "no-store", signal: controller.signal, headers: method === "GET" ? {} : { "Content-Type": "application/json" }, ...(method !== "GET" ? { body: JSON.stringify(data ?? {}) } : {}) });
-    const value: unknown = await response.json();
+    const value: unknown = response.ok && binary
+      ? { blob: await response.blob(), fileName: decodeURIComponent(response.headers.get("content-disposition")?.split("filename*=UTF-8''")[1] ?? "attachment") }
+      : await response.json();
     if (atStart !== epoch) throw new ObsoleteRequest();
     if (!response.ok) {
       const failure = value as { code: string; message: string };
@@ -121,6 +126,39 @@ function sourceLink(url: string): HTMLAnchorElement {
   try { const parsed = new URL(url); if (parsed.protocol === "https:") link.href = parsed.href; } catch { /* No unsafe URLs. */ }
   link.target = "_blank"; link.rel = "noopener noreferrer"; return link;
 }
+function attachmentPanel(number: string, sequence: number): { button: HTMLButtonElement; panel: HTMLElement } {
+  const panel = node("section", undefined, "attachments print-hide"); panel.hidden = true;
+  panel.setAttribute("aria-label", "Anhänge");
+  const button = node("button", "Anhänge anzeigen"); button.type = "button";
+  button.setAttribute("aria-expanded", "false");
+  button.addEventListener("click", () => { void action(async () => {
+    const { attachments } = await api<{ attachments: Omit<NoteAttachment, "url">[] }>("/api/attachments/list", "POST", { number });
+    if (sequence !== noteSequence) throw new ObsoleteRequest();
+    panel.replaceChildren(node("h3", "Anhänge")); panel.hidden = false; button.setAttribute("aria-expanded", "true");
+    button.textContent = "Anhänge aktualisieren";
+    if (!attachments.length) panel.append(node("p", "Keine Anhänge verfügbar. SAP kann Anhänge während der Vorbereitung einer neuen Note-Version ausblenden."));
+    for (const attachment of attachments) {
+      const row = node("div", undefined, "attachment-row");
+      const label = node("div", attachment.fileName);
+      if (attachment.sizeBytes !== undefined) label.append(node("small", `${new Intl.NumberFormat("de-DE", { maximumFractionDigits: 1 }).format(attachment.sizeBytes / 1024)} KB`));
+      const download = node("button", "Herunterladen"); download.type = "button";
+      download.setAttribute("aria-label", `${attachment.fileName} herunterladen`);
+      download.addEventListener("click", () => { void action(async () => {
+        download.textContent = "Wird geladen …";
+        try {
+          const value = await api<{ blob: Blob; fileName: string }>("/api/attachments/download", "POST", { number, fileName: attachment.fileName }, true);
+          if (sequence !== noteSequence) throw new ObsoleteRequest();
+          const url = URL.createObjectURL(value.blob); downloadUrls.add(url);
+          const link = node("a"); link.href = url; link.download = value.fileName;
+          document.body.append(link); link.click(); link.remove();
+          window.setTimeout(() => { URL.revokeObjectURL(url); downloadUrls.delete(url); }, 1000);
+        } finally { download.textContent = "Herunterladen"; }
+      }, download); });
+      row.append(label, download); panel.append(row);
+    }
+  }, button); });
+  return { button, panel };
+}
 async function openNote(number: string): Promise<{ id: string; title: string }> {
   if (!/^\d{4,10}$/.test(number)) throw new Error("Eine Note-Nummer besteht aus 4 bis 10 Ziffern.");
   const sequence = ++noteSequence;
@@ -130,12 +168,13 @@ async function openNote(number: string): Promise<{ id: string; title: string }> 
     if (sequence !== noteSequence) throw new ObsoleteRequest();
     const header = node("div", undefined, "note-header");
     const actions = node("div", undefined, "note-actions");
-    actions.append(sourceLink(note.url), printButton());
+    const attachments = attachmentPanel(number, sequence);
+    actions.append(sourceLink(note.url), printButton(), attachments.button);
     header.append(node("div", `SAP NOTE / KBA · ${note.id}`, "eyebrow"), node("h2", note.title), actions);
     const content = node("div", undefined, "note-body");
     // Only HTML produced by the server's HTML-disabled Markdown renderer.
     content.innerHTML = note.html;
-    el("note-content").replaceChildren(header, content, printMeta(note.url));
+    el("note-content").replaceChildren(header, attachments.panel, content, printMeta(note.url));
     document.title = `SAP Note ${note.id} – ${note.title}`;
     for (const hit of document.querySelectorAll<HTMLButtonElement>(".result")) hit.classList.toggle("selected", hit.dataset.number === number);
     return { id: note.id, title: note.title };

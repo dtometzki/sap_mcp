@@ -131,6 +131,8 @@ des Terminals, nicht aber Abmelden oder Neustart des Rechners – danach erneut
    Minuten Zeitüberschreitung schließen das Anmeldefenster.
 4. Nach Fehlermeldung, Produkt oder Problem suchen (2–500 Zeichen; 1–25 Treffer,
    Standard 10), oder eine Note direkt über ihre 4–10-stellige Nummer öffnen.
+   **Anhänge anzeigen** listet verfügbare Dateien mit Download-Button auf (z. B. ZIP
+   oder PDF). **Herunterladen** speichert die Datei über den Browser.
    **Als PDF sichern** in der Note-Ansicht öffnet den Druckdialog des Browsers
    (macOS: „Als PDF sichern“); gedruckt wird nur die Note mit Quelle und
    Abrufzeitpunkt, der vorgeschlagene Dateiname ist „SAP Note <Nr> – <Titel>“.
@@ -187,8 +189,13 @@ verwaltet ihren Zugang unabhängig davon. Ein Kontowechsel oder das Löschen der
 Zugangsdaten entfernt die Web-SAP-Session. MCP und Login-CLI funktionieren wie bisher.
 
 HTML aus Notes wird als Text behandelt, externe Bilder werden nicht geladen und
-Links auf sichere Protokolle begrenzt. Anhänge sind weiterhin über den MCP verfügbar;
-die Web-App unterstützt in dieser Version keine Anhang-Downloads.
+Links auf sichere Protokolle begrenzt. Anhang-Downloads in der Web-App benötigen
+einen entsperrten Tresor und die SAP-Berechtigung für die jeweilige Datei. Sie sind
+auf 100 MiB pro Datei begrenzt und werden im Arbeitsspeicher an den Browser
+übergeben; auf dem Server entstehen keine Klartextdateien. Das Ziel bestimmt der
+Browser, `SAP_ATTACHMENT_DIR` gilt weiterhin nur für MCP-Downloads. Sperren bricht
+laufende Downloads ab; bereits im Browser gespeicherte Dateien bleiben erhalten.
+SAP kann Anhänge während der Vorbereitung einer neuen Note-Version ausblenden.
 
 Browser mit WebMCP-Unterstützung können die sichtbaren Aktionen
 `search_sap_notes` und `open_sap_note` nutzen. Diese benötigen dieselbe entsperrte

@@ -48,6 +48,10 @@ main, .search-layout > *, .settings-grid > *, .query-field, .history-query {
 .print-meta { display: none; }
 
 /* Print / "Als PDF sichern": only the opened note, on paper-friendly colours. */
+.attachments { padding: 1rem 1.5rem; border-bottom: 1px solid var(--border, #dbe3ec); }
+.attachment-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem; padding: .75rem 0; }
+.attachment-row > div { flex: 1 1 12rem; min-width: 0; overflow-wrap: anywhere; }
+.attachment-row small { display: block; }
 @media print {
   @page { margin: 18mm 16mm; }
   :root { background: white; color: black; font-size: 11pt; line-height: 1.45; }

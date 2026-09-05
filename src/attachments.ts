@@ -559,6 +559,64 @@ export async function downloadAttachment(
   });
 }
 
+/** Browser downloads stay in memory; the MCP's disk-based download remains unchanged. */
+export interface AttachmentBytes { fileName: string; data: Buffer }
+
+export async function readAttachmentBytes(response: Response, signal: AbortSignal, touch: () => void, maxBytes = MAX_DOWNLOAD_BYTES): Promise<Buffer> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new PublicError("Attachment response has no body.");
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  const cancel = (): void => { void reader.cancel().catch(() => undefined); };
+  signal.addEventListener("abort", cancel, { once: true });
+  try {
+    signal.throwIfAborted();
+    if (Number(response.headers.get("content-length")) > maxBytes) throw new PublicError("Attachment exceeds download size limit.");
+    for (;;) {
+      const { done, value } = await reader.read();
+      signal.throwIfAborted();
+      if (done) break;
+      touch(); bytes += value.byteLength;
+      if (bytes > maxBytes) throw new PublicError("Attachment exceeds download size limit.");
+      chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks, bytes);
+  } finally {
+    signal.removeEventListener("abort", cancel);
+    await reader.cancel().catch(() => undefined);
+    for (const chunk of chunks) chunk.fill(0);
+  }
+}
+
+export async function downloadAttachmentBytes(session: SapSession, config: Config, id: string, fileName: string, signal: AbortSignal): Promise<AttachmentBytes> {
+  const attachments = await fetchAttachmentList(session, config, id);
+  signal.throwIfAborted();
+  // Only exact names from this note are accepted; clients cannot supply download URLs.
+  const attachment = attachments.find(item => item.fileName === fileName);
+  if (!attachment) throw new PublicError("Attachment is no longer available. Refresh the attachment list.");
+  return withRetry(async () => {
+    signal.throwIfAborted();
+    const watchdog = inactivityWatchdog(config.apiTimeoutMs);
+    const combined = AbortSignal.any([signal, watchdog.signal]);
+    let response: Response | undefined;
+    try {
+      response = await fetchAllowedAttachment(attachment.url, url =>
+        isTrustedAttachmentCookieHost(url, config.attachmentCookieHosts) ? session.cookieHeader(url) : Promise.resolve(""), combined);
+      watchdog.touch();
+      assertUsableAttachmentResponse(response.status, response.url, response.ok, response.headers.get("content-type") ?? "", attachment.fileName);
+      const data = await readAttachmentBytes(response, combined, () => watchdog.touch());
+      return { fileName: sanitizeFileName(attachment.fileName), data };
+    } catch (error) {
+      signal.throwIfAborted();
+      if (watchdog.signal.aborted) throw new PublicError("Attachment download ETIMEDOUT", { cause: error });
+      throw error;
+    } finally {
+      watchdog.clear();
+      await response?.body?.cancel().catch(() => undefined);
+    }
+  });
+}
+
 async function transferAttachment(
   session: SapSession,
   config: Config,

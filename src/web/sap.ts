@@ -4,6 +4,7 @@ import { AutoLoginError, MfaRequiredError, fillLoginForm, performAutoLogin, type
 import { SapSession, SessionExpiredError, type SessionStore } from "../session.js";
 import { fetchNote, searchNotes, resetTokenCache, type NoteDetail, type NoteHit } from "../notes.js";
 import { ToolRunner } from "../toolRunner.js";
+import { fetchAttachmentList, downloadAttachmentBytes, type AttachmentBytes, type NoteAttachment } from "../attachments.js";
 import { assertAllowedPageUrl } from "../urls.js";
 import { Vault, WebError, locked } from "./vault.js";
 
@@ -13,6 +14,8 @@ export interface SapGateway {
   check(): Promise<SapStatus>;
   search(query: string, limit: number): Promise<NoteHit[]>;
   note(number: string): Promise<NoteDetail>;
+  attachments(number: string): Promise<Omit<NoteAttachment, "url">[]>;
+  download(number: string, fileName: string, signal: AbortSignal): Promise<AttachmentBytes>;
   interactiveStart(): Promise<void>;
   interactiveFinish(): Promise<void>;
   interactiveCancel(): Promise<void>;
@@ -74,6 +77,12 @@ export class BrowserSapGateway implements SapGateway {
   }
   search(query: string, limit: number): Promise<NoteHit[]> { return this.run(() => searchNotes(this.session, this.config, query, limit)); }
   note(number: string): Promise<NoteDetail> { return this.run(() => fetchNote(this.session, this.config, number)); }
+  attachments(number: string): Promise<Omit<NoteAttachment, "url">[]> {
+    return this.run(async () => (await fetchAttachmentList(this.session, this.config, number)).map(({ fileName, sizeBytes }) => ({ fileName, sizeBytes })));
+  }
+  download(number: string, fileName: string, signal: AbortSignal): Promise<AttachmentBytes> {
+    return this.run(() => downloadAttachmentBytes(this.session, this.config, number, fileName, AbortSignal.any([signal, this.abort.signal])));
+  }
   async interactiveStart(): Promise<void> {
     this.abort.signal.throwIfAborted();
     if (this.interactive) return;
@@ -174,6 +183,10 @@ export class WebService {
     });
   }
   note(number: string): Promise<NoteDetail> { return this.run(() => this.sap().note(number)); }
+  attachments(number: string): Promise<Omit<NoteAttachment, "url">[]> { return this.run(() => this.sap().attachments(number)); }
+  download(number: string, fileName: string, signal: AbortSignal): Promise<AttachmentBytes> {
+    return this.run(() => { signal.throwIfAborted(); return this.sap().download(number, fileName, signal); });
+  }
   credentials(credentials?: Credentials): Promise<void> {
     return this.run(async () => {
       const epoch = this.epoch;

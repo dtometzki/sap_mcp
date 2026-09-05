@@ -7,6 +7,16 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.12.0] – 2026-09-05
+
+### Hinzugefügt
+- Web-App: Anhänge einer Note mit Dateiname, Größe und Download-Button anzeigen;
+  ZIP, PDF und weitere Anhänge direkt über den Browser speichern.
+- Geschützte Download-Endpunkte verwenden die SAP-Session des Tresors und
+  erlauben nur Dateien aus der Anhangsliste der jeweiligen Note. Downloads
+  bleiben bis zur Übergabe an den Browser im Arbeitsspeicher (maximal 100 MiB),
+  übernehmen die SAP-Host-/Redirect-Prüfung und werden beim Sperren abgebrochen.
+
 ## [1.11.0] – 2026-09-05
 
 ### Hinzugefügt
