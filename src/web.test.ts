@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, readFile, writeFile, rm, stat, readdir } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, writeFile, rm, stat, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { request as httpRequest } from "node:http";
 import { chromium, type Browser } from "playwright";
 import { randomUUID } from "node:crypto";
-import { Vault, WebError } from "./web/vault.js";
+import { MAX_HISTORY, Vault, WebError } from "./web/vault.js";
 import { WebService, type SapGateway, type SapStatus } from "./web/sap.js";
-import { createWebServer } from "./web/http.js";
+import { createWebServer, type WebServerOptions } from "./web/http.js";
 import { renderNote } from "./web/markdown.js";
 import { loadAppInfo, type AppInfo } from "./web/about.js";
 import { SapSession, AccessDeniedError, SessionExpiredError, type SessionState, type SessionStore } from "./session.js";
@@ -94,12 +94,12 @@ class FakeSap implements SapGateway {
   async interactiveCancel() { this.status = "login_required"; }
   async close() { this.status = "unknown"; }
 }
-async function fixture() {
+async function fixture(options: WebServerOptions = {}) {
   const temp = await temporary();
   const vault = new Vault(temp.path);
   const gateways: FakeSap[] = [];
   const service = new WebService(vault, store => { const gateway = new FakeSap(store); gateways.push(gateway); return gateway; });
-  const server = createWebServer(service);
+  const server = createWebServer(service, options);
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
   const address = server.address(); if (!address || typeof address === "string") throw new Error("No address");
   const origin = `http://127.0.0.1:${address.port}`;
@@ -247,6 +247,20 @@ test("SapSession uses an injected state store without a plaintext file", async t
   } finally { await session.close(); await rm(temp.directory, { recursive: true, force: true }); }
 });
 
+test("SapSession.saveState tightens a pre-existing, group-readable state directory", async t => {
+  const browser = await browserOrSkip(t); if (!browser) return; await browser.close();
+  const temp = await temporary();
+  const loose = join(temp.directory, "state"); await mkdir(loose, { mode: 0o755 }); await chmod(loose, 0o755);
+  const statePath = join(loose, "session.json"); await writeFile(statePath, JSON.stringify(storage), { mode: 0o644 });
+  const session = new SapSession({ ...loadConfig(), storageStatePath: statePath }, true);
+  try {
+    await session.start(); await session.saveState();
+    assert.equal((await stat(loose)).mode & 0o777, 0o700);
+    assert.equal((await stat(statePath)).mode & 0o777, 0o600);
+    assert.ok((await readFile(statePath, "utf8")).includes(COOKIE_SECRET));
+  } finally { await session.close(); await rm(temp.directory, { recursive: true, force: true }); }
+});
+
 test("browser acceptance flow and WebMCP contracts use the same visible application state", async t => {
   const browser = await browserOrSkip(t); if (!browser) return;
   const f = await fixture();
@@ -323,6 +337,41 @@ test("a delayed authenticated request body cannot mutate a newly unlocked sessio
   } finally { await f.cleanup(); }
 });
 
+test("vault caps the search history at MAX_HISTORY, newest first, and shrinks an oversized vault on unlock", async () => {
+  const { directory, path } = await temporary();
+  try {
+    const vault = new Vault(path); await vault.setup(PASSWORD);
+    const entry = (index: number) => ({ id: randomUUID(), query: `query ${index}`, limit: 10, count: 1, at: new Date().toISOString() });
+    await vault.update(data => { for (let index = 0; index < MAX_HISTORY + 25; index++) data.history.unshift(entry(index)); });
+    assert.equal(vault.snapshot().history.length, MAX_HISTORY);
+    assert.equal(vault.history[0]?.query, `query ${MAX_HISTORY + 24}`);
+    assert.equal(vault.username, undefined);
+    await vault.update(data => { data.credentials = { username: "S123", password: SAP_PASSWORD }; });
+    assert.equal(vault.username, "S123");
+    vault.lock(); assert.throws(() => vault.username, { code: "LOCKED" }); assert.throws(() => vault.history, { code: "LOCKED" });
+    await vault.unlock(PASSWORD); assert.equal(vault.history.length, MAX_HISTORY);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("idle lock signs every browser session out; the unauthenticated state poll does not keep it alive", async () => {
+  const f = await fixture({ idleLockMs: 300 });
+  try {
+    await f.request("/api/setup", "POST", { password: PASSWORD });
+    await f.request("/api/credentials", "PUT", { username: "S123", password: SAP_PASSWORD });
+    // Authenticated traffic re-arms the timer.
+    for (let index = 0; index < 3; index++) { await new Promise(resolve => setTimeout(resolve, 150)); assert.equal((await f.request("/api/history")).status, 200); }
+    // Polling /api/state alone must not: it runs before authentication.
+    const deadline = Date.now() + 700;
+    while (Date.now() < deadline) { await f.request("/api/state"); await new Promise(resolve => setTimeout(resolve, 50)); }
+    assert.equal(f.vault.unlocked, false);
+    assert.equal(f.service.status, "unknown");
+    assert.equal((await f.request("/api/history")).status, 401);
+    const state = await (await f.request("/api/state")).json() as { unlocked: boolean; username?: string };
+    assert.equal(state.unlocked, false); assert.equal(state.username, undefined);
+    assert.equal((await f.request("/api/unlock", "POST", { password: PASSWORD })).status, 200);
+    assert.equal((await f.request("/api/history")).status, 200);
+  } finally { await f.cleanup(); }
+});
 
 test("About retains the app version when Git metadata is unavailable", async () => {
   const { directory } = await temporary();

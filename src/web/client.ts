@@ -72,8 +72,11 @@ async function api<T>(path: string, method = "GET", data?: unknown): Promise<T> 
 }
 async function refreshState(): Promise<void> {
   const next = await api<State>("/api/state");
-  if (state.unlocked && !next.unlocked) clearPrivateView();
+  const lockedElsewhere = state.unlocked && !next.unlocked;
+  if (lockedElsewhere) clearPrivateView();
   state = next; renderState();
+  // Server-side idle lock or a lock from another browser: say why the workspace vanished.
+  if (lockedElsewhere) message("Der Arbeitsbereich wurde gesperrt (Inaktivität oder Sperren in einer anderen Sitzung).");
 }
 async function action(fn: () => Promise<unknown>, source?: HTMLElement): Promise<void> {
   const buttons = source ? [...source.querySelectorAll<HTMLButtonElement>("button")] : [];

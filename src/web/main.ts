@@ -14,6 +14,7 @@ async function main(): Promise<void> {
   scrubCredentialsFromEnv();
   const config = { ...loadConfig(), username: undefined, password: undefined, autoLoginEnabled: true };
   const port = intFromEnv("SAP_WEB_PORT", 3210, 1, 65535);
+  const idleLockMs = intFromEnv("SAP_WEB_IDLE_LOCK_MS", 30 * 60_000, 0);
   const directory = resolve(expandHomePath(process.env.SAP_WEB_DATA_DIR ?? join(homedir(), ".sap-notes-web")));
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const lockPath = join(directory, "server.lock");
@@ -26,7 +27,11 @@ async function main(): Promise<void> {
       try { process.kill(pid, 0); }
       catch (probe) {
         if ((probe as NodeJS.ErrnoException).code === "ESRCH") {
-          await rm(lockPath); return open(lockPath, "wx", 0o600);
+          // Two starters may clean up the same stale lock; the loser must get the same
+          // readable message instead of a raw EEXIST from the second exclusive open.
+          await rm(lockPath, { force: true });
+          try { return await open(lockPath, "wx", 0o600); }
+          catch (retry) { if ((retry as NodeJS.ErrnoException).code !== "EEXIST") throw retry; }
         }
       }
       throw new WebError("ALREADY_RUNNING", "Für dieses Datenverzeichnis läuft bereits eine App.");
@@ -36,7 +41,7 @@ async function main(): Promise<void> {
   await lockFile.writeFile(String(process.pid));
   const vault = new Vault(join(directory, "vault.enc"));
   const service = new WebService(vault, (store, credentials) => new BrowserSapGateway(config, store, credentials));
-  const server = createWebServer(service);
+  const server = createWebServer(service, { idleLockMs });
   let stopping = false;
   const shutdown = async (): Promise<void> => {
     if (stopping) return; stopping = true;
