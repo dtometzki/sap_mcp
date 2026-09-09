@@ -181,6 +181,7 @@ Installation ohne Git-Metadaten steht beim Commit „Nicht verfügbar“.
 | `SAP_WEB_PORT` | `3210` | Lokaler HTTP-Port, 1–65535. Ist der Port belegt, bricht der Start mit einer entsprechenden Meldung ab |
 | `SAP_WEB_DATA_DIR` | `~/.sap-notes-web` | Datenverzeichnis mit `vault.enc`, Prozess-Sperrdatei `server.lock` und `web.log` des Hintergrundstarts |
 | `SAP_WEB_IDLE_LOCK_MS` | `1800000` | Tresor nach Inaktivität sperren, alle Browser-Sitzungen abmelden (0 = deaktiviert) |
+| `SAP_WEB_VAULT_B64_1` … `_4` | – | Optional, für Cursor Cloud: Base64-Teile einer vorhandenen `vault.enc`. Alle vier müssen gesetzt sein; `scripts/cloud-web-start.sh` setzt sie zu `vault.enc` zusammen und startet die Web-App. Werte nie ins Repository oder in Logs schreiben |
 
 Nur die exakte Adresse `http://127.0.0.1:<Port>` wird akzeptiert, kein Netzwerkzugriff,
 kein Reverse-Proxy und kein öffentliches Hosting. Das lokale HTTP-Cookie hat
@@ -221,6 +222,13 @@ Passwörter oder das Entsperren. Ohne WebMCP funktioniert die Oberfläche vollst
 Es gibt **keine Passwortwiederherstellung**. Für eine Sicherung die App beenden und
 `vault.enc` aus dem Datenverzeichnis kopieren; zum Wiederherstellen sind die Datei
 und das zugehörige Master-Passwort nötig. Bestehende Daten nicht überschreiben.
+
+In Cursor Cloud stellen Environment-Secrets `SAP_WEB_VAULT_B64_1` bis `_4` den
+Tresor beim Agentenstart wieder her (`.cursor/environment.json` ruft
+`scripts/cloud-web-start.sh` auf). Die Teile sind die Base64-Kodierung von `vault.enc`,
+bei Bedarf in vier Brocken. Werte nur als Secrets hinterlegen, nicht in Chats oder
+Dateien. Nach einer Änderung am Tresor die Secrets aktualisieren, sonst überschreibt
+der nächste Agentenstart die Datei mit dem alten Stand.
 
 Für einen neuen, leeren Tresor die App beenden und `vault.enc` umbenennen oder
 bewusst löschen. Beim nächsten Start kann ein neuer Tresor angelegt werden. Ohne

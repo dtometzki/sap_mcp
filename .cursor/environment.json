@@ -1,3 +1,10 @@
 {
-  "install": "npm ci && npm run build && npx playwright install --with-deps chromium"
+  "install": "npm ci && npm run build && npx playwright install --with-deps chromium",
+  "start": "bash scripts/cloud-web-start.sh",
+  "ports": [
+    {
+      "name": "SAP Notes Web",
+      "port": 3210
+    }
+  ]
 }
