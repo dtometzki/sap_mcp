@@ -1,6 +1,6 @@
 {
   "name": "sap-notes-mcp",
-  "version": "1.13.0",
+  "version": "1.13.1",
   "private": true,
   "description": "MCP server for searching and fetching SAP Notes / KBAs from the protected SAP support area",
   "type": "module",
@@ -18,7 +18,9 @@
     "web": "npm run build && node dist/web/main.js",
     "web:start": "npm run build && node dist/web/daemon.js start",
     "web:stop": "node dist/web/daemon.js stop",
-    "web:status": "node dist/web/daemon.js status"
+    "web:status": "node dist/web/daemon.js status",
+    "web:restore-vault": "bash scripts/restore-web-vault.sh",
+    "web:cloud-start": "bash scripts/cloud-web-start.sh"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",

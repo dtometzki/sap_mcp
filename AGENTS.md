@@ -31,3 +31,17 @@ einen Pull Request nach `main` bereitgestellt:
 8. **Branch nach dem Merge entfernen** – nach einem erfolgreichen Merge nach `main` die
    zugehörige `codex/`-Branch lokal und auf `origin` löschen, sofern der Benutzer nichts
    anderes vorgibt.
+
+## Cursor Cloud
+
+Beim Umgebungstart stellt `scripts/cloud-web-start.sh` den Tresor aus
+`SAP_WEB_VAULT_B64_1` bis `_4` wieder her (Verzeichnis `0700`, Datei `0600`) und
+führt `npm run web:start` aus. Das passiert automatisch — den Benutzer nicht
+nach Vault-Teilen, Master-Passwort oder einem Start-Prompt fragen.
+
+- Nur Vorhandensein und Länge der vier Variablen prüfen, niemals Werte oder
+  `vault.enc` per `echo`/`print`/`cat` ausgeben.
+- Fehlt einer der Teile: abbrechen, nicht nach Werten fragen.
+- Läuft die Web-App nicht (z. B. nach einem Absturz): `npm run web:cloud-start`
+  ausführen, nicht den Restore-Prompt vom Benutzer anfordern.
+- Status nur als ja/nein plus URL melden (`npm run web:status`), ohne Dateiinhalt.

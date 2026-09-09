@@ -7,6 +7,13 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.13.1] – 2026-09-09
+
+### Hinzugefügt
+- Cloud-Agenten stellen den vorhandenen Tresor beim Umgebungstart aus
+  `SAP_WEB_VAULT_B64_1` bis `_4` wieder her und starten die Web-App
+  (`scripts/cloud-web-start.sh`). Werte und Tresorinhalt werden nicht ausgegeben.
+
 ## [1.13.0] – 2026-09-05
 
 ### Hinzugefügt
