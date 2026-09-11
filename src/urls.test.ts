@@ -11,19 +11,26 @@ import {
   redactUrlForLog,
 } from "./urls.js";
 
-test("credentials are restricted to exact HTTPS identity-provider origins", () => {
-  for (const url of ["https://accounts.sap.com/login", "https://accounts.sap.cn/login", "https://accounts.sap.com:443/login"]) {
+test("credentials are restricted to HTTPS identity-provider hosts including regional subdomains", () => {
+  for (const url of [
+    "https://accounts.sap.com/login",
+    "https://accounts.sap.cn/login",
+    "https://accounts.sap.com:443/login",
+    "https://eu.accounts.sap.com/login",
+    "https://accounts.sap.cn/saml2/idp/sso",
+    "https://cn1.accounts.sap.cn/login",
+  ]) {
     assert.equal(isAllowedLoginUrl(url), true, url);
   }
   for (const url of [
     "https://me.sap.com/login",
     "https://campaign.sap.com/login",
     "https://sap.cn/login",
-    "https://eu.accounts.sap.com/login",
     "https://accounts.sap.com:8443/login",
     "https://accounts.sap.com.evil.example/login",
     "https://user:secret@accounts.sap.com/login",
     "http://accounts.sap.com/login",
+    "https://eu.accounts.sap.com.evil.example/login",
   ]) {
     assert.equal(isAllowedLoginUrl(url), false, url);
   }

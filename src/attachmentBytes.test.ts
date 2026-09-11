@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readAttachmentBytes, downloadAttachmentBytes } from "./attachments.js";
+import { readAttachmentBytes, downloadAttachmentBytes, limitResponseBody } from "./attachments.js";
 import { loadConfig } from "./config.js";
 import { AccessDeniedError, SessionExpiredError, type SapSession } from "./session.js";
 
@@ -12,6 +12,16 @@ test("memory downloads preserve binary data and enforce declared and actual size
   assert.equal(touches, 1);
   await assert.rejects(readAttachmentBytes(new Response(payload, { headers: { "content-length": "100" } }), signal, () => {}, 6), /size limit/);
   await assert.rejects(readAttachmentBytes(new Response(payload, { headers: { "content-length": "1" } }), signal, () => {}, 5), /size limit/);
+});
+
+test("limited response bodies enforce the byte cap while streaming", async () => {
+  const payload = new Uint8Array(8);
+  const response = new Response(payload);
+  const stream = limitResponseBody(response, new AbortController().signal, () => {}, 4, () => {});
+  const reader = stream.getReader();
+  await assert.rejects((async () => {
+    while (!(await reader.read()).done) { /* drain */ }
+  })(), /size limit/);
 });
 
 test("memory downloads cancel a stalled stream on lock or client disconnect", async () => {

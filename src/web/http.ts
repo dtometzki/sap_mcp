@@ -1,6 +1,21 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+
+async function* readableStreamChunks(body: ReadableStream<Uint8Array>): AsyncGenerator<Uint8Array> {
+  const reader = body.getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      yield value;
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+}
 import { z } from "zod";
 import { AccessDeniedError, SessionExpiredError } from "../session.js";
 import { credentialsSchema, masterSchema, WebError, locked } from "./vault.js";
@@ -224,10 +239,18 @@ export function createWebServer(service: WebService, options: WebServerOptions =
         response.once("finish", cleanup);
         try {
           const download = await service.download(number, fileName, controller.signal);
-          if (generation !== started || !hasSession() || controller.signal.aborted) { download.data.fill(0); throw locked(); }
+          if (generation !== started || !hasSession() || controller.signal.aborted) {
+            await download.body.cancel().catch(() => undefined);
+            throw locked();
+          }
           const encoded = encodeURIComponent(sanitizeFileName(download.fileName)).replace(/['()*]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
-          response.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename*=UTF-8''${encoded}`, "Content-Length": download.data.length });
-          response.end(download.data, () => download.data.fill(0));
+          const headers: Record<string, string | number> = {
+            "Content-Type": "application/octet-stream",
+            "Content-Disposition": `attachment; filename*=UTF-8''${encoded}`,
+          };
+          if (download.sizeBytes !== undefined) headers["Content-Length"] = download.sizeBytes;
+          response.writeHead(200, headers);
+          await pipeline(Readable.from(readableStreamChunks(download.body)), response);
           return;
         } finally { if (!response.headersSent) cleanup(); }
       } else if (path === "/api/search" && method === "POST") {
@@ -269,6 +292,10 @@ export function createWebServer(service: WebService, options: WebServerOptions =
       if (generation !== started || !service.vault.unlocked || !cookie || !sessions.has(cookie)) throw locked();
       json(response, 200, result);
     } catch (error) {
+      if (response.headersSent) {
+        if (!response.writableEnded) response.destroy();
+        return;
+      }
       const safe = authenticated && (generation !== started || !service.vault.unlocked) ? locked() : errorBody(error);
       json(response, safe.status, { code: safe.code, message: safe.message });
     }

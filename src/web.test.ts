@@ -58,8 +58,32 @@ test("vault encrypts all secrets, survives restart, rejects corruption and rotat
     await assert.rejects(restarted.unlock(SECOND), { code: "UNLOCK_FAILED" });
     await writeFile(path, valid);
     await assert.rejects(restarted.setup(PASSWORD), { code: "EXISTS" });
+    const stored = JSON.parse(valid) as { version: number; session?: { ciphertext: string } };
+    assert.equal(stored.version, 2);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+test("history writes reuse the session ciphertext", async () => {
+  const { directory, path } = await temporary();
+  try {
+    const vault = new Vault(path);
+    await vault.setup(PASSWORD);
+    await vault.update(data => { data.credentials = { username: "S123", password: SAP_PASSWORD }; data.session = storage; });
+    const first = JSON.parse(await readFile(path, "utf8")) as { ciphertext: string; session: { ciphertext: string } };
+    await vault.update(data => {
+      data.history.unshift({ id: randomUUID(), query: "hana", limit: 10, count: 1, at: new Date().toISOString() });
+    });
+    const second = JSON.parse(await readFile(path, "utf8")) as typeof first;
+    assert.equal(second.session.ciphertext, first.session.ciphertext);
+    assert.notEqual(second.ciphertext, first.ciphertext);
+    await vault.update(data => {
+      data.session = { cookies: [...storage.cookies, { ...storage.cookies[0]!, name: "other" }], origins: [] };
+    });
+    const third = JSON.parse(await readFile(path, "utf8")) as typeof first;
+    assert.notEqual(third.session.ciphertext, first.session.ciphertext);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 
 test("vault serializes writes and lock invalidates queued work and an in-progress unlock", async () => {
   const { directory, path } = await temporary();
@@ -82,6 +106,7 @@ class FakeSap implements SapGateway {
   calls: string[] = [];
   failure?: Error;
   waitForSearch?: Promise<void>;
+  waitForBody?: Promise<void>;
   constructor(readonly store: SessionStore) {}
   async check() { if (this.failure) throw this.failure; this.status = "authenticated" as const; return this.status; }
   async search(query: string): Promise<NoteHit[]> {
@@ -91,7 +116,23 @@ class FakeSap implements SapGateway {
   }
   async note(number: string) { if (this.failure) throw this.failure; return { id: number, title: "HANA troubleshooting", url: `https://me.sap.com/notes/${number}`, markdown: "# Symptom\n\nA **bold** solution.\n\n<script>alert(1)</script>\n\n![track](https://example.com/pixel)\n\n[unsafe](javascript:alert(1))\n\n### Attachments\n\n| File Name | File Size |\n| --- | --- |\n| SQLStatements.zip | 4 KB |\n| Anleitung.pdf | 8 KB |" }; }
   async attachments() { if (this.failure) throw this.failure; return [{ fileName: "SQLStatements.zip", sizeBytes: 4 }, { fileName: "Anleitung.pdf", sizeBytes: 8 }]; }
-  async download(_number: string, fileName: string, signal: AbortSignal) { await this.waitForSearch; signal.throwIfAborted(); if (this.failure) throw this.failure; return { fileName, data: Buffer.from(fileName.endsWith(".pdf") ? "%PDF-1.7" : "PK\x03\x04") }; }
+  async download(_number: string, fileName: string, signal: AbortSignal) {
+    await this.waitForSearch; signal.throwIfAborted(); if (this.failure) throw this.failure;
+    const data = Buffer.from(fileName.endsWith(".pdf") ? "%PDF-1.7" : "PK\x03\x04");
+    const wait = this.waitForBody;
+    return {
+      fileName,
+      contentType: "application/octet-stream",
+      sizeBytes: data.length,
+      body: new ReadableStream<Uint8Array>({
+        async start(controller) {
+          if (wait) await wait;
+          controller.enqueue(new Uint8Array(data));
+          controller.close();
+        },
+      }),
+    };
+  }
   async interactiveStart() { this.status = "interactive"; }
   async interactiveFinish() { this.status = "authenticated"; await this.store.save(storage); }
   async interactiveCancel() { this.status = "login_required"; }
@@ -559,6 +600,25 @@ test("web attachments enforce authorization, validation, safe binary delivery an
   } finally { await f.cleanup(); }
 });
 
+test("attachment body streams without holding the SAP queue", async () => {
+  const f = await fixture();
+  try {
+    await f.request("/api/setup", "POST", { password: PASSWORD });
+    await f.request("/api/sap/check", "POST");
+    const gateway = f.gateways[0]; assert.ok(gateway);
+    let release!: () => void;
+    gateway.waitForBody = new Promise<void>(resolve => { release = resolve; });
+    const pending = f.request("/api/attachments/download", "POST", { number: "1969700", fileName: "SQLStatements.zip" });
+    await new Promise(resolve => setTimeout(resolve, 30));
+    const search = await f.request("/api/search", "POST", { query: "HANA backup", limit: 5 });
+    assert.equal(search.status, 200);
+    release();
+    const file = await pending;
+    assert.equal(file.status, 200);
+    assert.equal((await file.arrayBuffer()).byteLength, 4);
+  } finally { await f.cleanup(); }
+});
+
 test("favorites are private, validated, deduplicated, filtered and retained across restart and account changes", async () => {
   const f = await fixture();
   const input = { title: "SQL Collection", tags: [" HANA ", "SQL", "hana"], memo: "PRIVATE-FAVORITE-MEMO <script>bad()</script>" };
@@ -646,6 +706,7 @@ test("legacy encrypted vaults without favorites unlock without losing credential
     assert.equal(vault.favorites.length, 0); assert.deepEqual(vault.history, history);
     assert.equal(vault.snapshot().credentials?.password, SAP_PASSWORD); assert.deepEqual(vault.snapshot().session, storage);
     await vault.update(data => { data.favorites.push({ number: "1969700", title: "SQL", tags: ["HANA"], memo: "Personal memo", createdAt: history[0]!.at, updatedAt: history[0]!.at }); });
+    assert.equal((JSON.parse(await readFile(temp.path, "utf8")) as { version: number }).version, 2);
     vault.lock(); await vault.unlock(PASSWORD); assert.equal(vault.favorites[0]?.memo, "Personal memo");
     assert.deepEqual(vault.history, history); vault.lock();
   } finally { key.fill(0); await rm(temp.directory, { recursive: true, force: true }); }

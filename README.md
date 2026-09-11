@@ -83,10 +83,11 @@ Damit gilt:
 * `SAP_AUTO_LOGIN=0` schaltet die Automatik ab, ohne die Credentials zu entfernen.
 
 Die automatische Eingabe von Benutzer und Passwort ist ausschließlich auf
-`https://accounts.sap.com` und `https://accounts.sap.cn` erlaubt (Standardport 443).
-Andere SAP-Subdomains sind keine freigegebenen Login-Seiten. Verwendet die Anmeldung
-einen anderen Identity Provider, ist der interaktive Login ohne hinterlegtes Passwort
-erforderlich. Die Origin wird vor jeder Eingabe erneut geprüft.
+`https://accounts.sap.com`, `https://accounts.sap.cn` und deren Subdomains
+(z. B. `eu.accounts.sap.com`) erlaubt (Standardport 443). Portal- und Kampagnen-
+Hosts wie `me.sap.com` oder `campaign.sap.com` sind keine Login-Seiten. Verwendet
+die Anmeldung einen anderen Identity Provider, ist der interaktive Login ohne
+hinterlegtes Passwort erforderlich. Die Origin wird vor jeder Eingabe erneut geprüft.
 
 Fehlerausgaben enthalten nur explizite Anwendungsmeldungen oder feste Fehlerkategorien.
 Interne Playwright-Aufrufprotokolle und Login-Banner werden nicht ausgegeben, da sie
@@ -206,10 +207,11 @@ Zugangsdaten entfernt die Web-SAP-Session. MCP und Login-CLI funktionieren wie b
 HTML aus Notes wird als Text behandelt, externe Bilder werden nicht geladen und
 Links auf sichere Protokolle begrenzt. Anhang-Downloads in der Web-App benötigen
 einen entsperrten Tresor und die SAP-Berechtigung für die jeweilige Datei. Sie sind
-auf 100 MiB pro Datei begrenzt und werden im Arbeitsspeicher an den Browser
-übergeben; auf dem Server entstehen keine Klartextdateien. Das Ziel bestimmt der
-Browser, `SAP_ATTACHMENT_DIR` gilt weiterhin nur für MCP-Downloads. Sperren bricht
-laufende Downloads ab; bereits im Browser gespeicherte Dateien bleiben erhalten.
+auf 100 MiB pro Datei begrenzt und werden als Stream an den Browser übergeben;
+auf dem Server entstehen keine Klartextdateien, und die SAP-Warteschlange bleibt
+während des Transfers frei. Das Ziel bestimmt der Browser, `SAP_ATTACHMENT_DIR`
+gilt weiterhin nur für MCP-Downloads. Sperren bricht laufende Downloads ab;
+bereits im Browser gespeicherte Dateien bleiben erhalten.
 SAP kann Anhänge während der Vorbereitung einer neuen Note-Version ausblenden.
 
 Browser mit WebMCP-Unterstützung können die sichtbaren Aktionen
@@ -355,7 +357,8 @@ Der Server benutzt bewusst **keine** hartkodierten CSS-Klassen:
 Portal- und Login-URLs müssen HTTPS auf `*.sap.com` / `*.sap.cn` bleiben (die
 Coveo-Suche zusätzlich `*.coveo.com`). Andere Werte — `http:`, `file:`, fremde
 Hosts — lehnt der Server beim Start ab. Für die automatische Eingabe von Zugangsdaten
-gilt die engere Origin-Liste `https://accounts.sap.com` / `https://accounts.sap.cn`.
+gilt die engere Host-Liste `accounts.sap.com` / `accounts.sap.cn` inklusive Subdomains
+(Port 443).
 
 ## Grenzen
 
