@@ -137,6 +137,17 @@ test("a DOM fallback with hits still answers when Coveo is down", async () => {
   ]);
 });
 
+test("DOM fallback hits always use the configured note URL, not a scraped href", async () => {
+  resetTokenCache();
+  const { session, config } = fakeSession(["t"], [{ status: 500, body: {} }], [
+    { id: "2170696", title: "Phishing title", url: "https://evil.example/notes/2170696" },
+  ]);
+  const hits = await searchNotes(session, config, "hana", 10);
+  assert.deepEqual(hits, [
+    { id: "2170696", title: "Phishing title", url: "https://me.sap.com/notes/2170696" },
+  ]);
+});
+
 test("HTTP 429 counts as transient, other 4xx do not", () => {
   assert.equal(isTransientError(new Error("Coveo search failed: HTTP 429")), true);
   assert.equal(isTransientError(new Error("Coveo search failed: HTTP 404")), false);

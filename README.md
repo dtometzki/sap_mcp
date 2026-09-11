@@ -319,7 +319,7 @@ Antwort des Portals.
 | `SAP_PROBE_URL` | `https://me.sap.com/notes/2170696` | Seite zur Session-Prüfung; muss `https://*.sap.com` oder `https://*.sap.cn` sein. Die Prüfung fragt zuerst `SAP_NOTE_API_URL` für dieselbe Note-Nummer ab und rendert die Seite nur bei mehrdeutiger Antwort |
 | `SAP_NAV_TIMEOUT_MS` | `60000` | Navigations-Timeout |
 | `SAP_API_TIMEOUT_MS` | `60000` | Timeout für direkte HTTP-API-Aufrufe (Coveo-Token/-Suche, Note-Detail-API); beim Anhang-Download maximale Wartezeit zwischen zwei Datenblöcken |
-| `SAP_NETWORK_IDLE_TIMEOUT_MS` | `4000` | Kurze Wartezeit auf Netzwerk-Ruhe |
+| `SAP_NETWORK_IDLE_TIMEOUT_MS` | `0` | Optionale Wartezeit auf Netzwerk-Ruhe nach dem Öffnen einer Portal-Seite; 0 überspringt sie (Default). Das Portal hält Verbindungen offen, der Timeout greift fast immer — Note-Inhalt und DOM-Fallbacks warten stattdessen auf den gerenderten Inhalt |
 | `SAP_RENDER_SETTLE_MS` | `2500` | Wartezeit für spätes SPA-Rendering |
 | `SAP_IDLE_TIMEOUT_MS` | `600000` | Browser nach Inaktivität schließen (0 = deaktiviert) |
 | `SAPUSER` | – | S-User für Login-CLI und automatischen Login (Alt-Name: `SAP_USERNAME`) |

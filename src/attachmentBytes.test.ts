@@ -49,8 +49,10 @@ test("browser transfer resolves exact note attachments, scopes cookies and rejec
   try {
     const result = await downloadAttachmentBytes(session, config, "1969700", fileName, signal);
     assert.equal(result.fileName, fileName); assert.equal(result.data.toString(), "PK\x03\x04");
-    await assert.rejects(downloadAttachmentBytes(session, config, "1969700", "SQLStatements", signal), /no longer available/);
-    assert.equal(calls, 1);
+    const byCase = await downloadAttachmentBytes(session, config, "1969700", fileName.toUpperCase(), signal);
+    assert.equal(byCase.fileName, fileName);
+    await assert.rejects(downloadAttachmentBytes(session, config, "1969700", "missing.zip", signal), /no attachment matching/);
+    assert.equal(calls, 2);
     status = 403; await assert.rejects(downloadAttachmentBytes(session, config, "1969700", fileName, signal), AccessDeniedError);
     status = 401; await assert.rejects(downloadAttachmentBytes(session, config, "1969700", fileName, signal), SessionExpiredError);
     status = 200; contentType = "text/html";

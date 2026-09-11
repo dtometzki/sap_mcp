@@ -596,9 +596,9 @@ export async function readAttachmentBytes(response: Response, signal: AbortSigna
 export async function downloadAttachmentBytes(session: SapSession, config: Config, id: string, fileName: string, signal: AbortSignal): Promise<AttachmentBytes> {
   const attachments = await fetchAttachmentList(session, config, id);
   signal.throwIfAborted();
-  // Only exact names from this note are accepted; clients cannot supply download URLs.
-  const attachment = attachments.find(item => item.fileName === fileName);
-  if (!attachment) throw new PublicError("Attachment is no longer available. Refresh the attachment list.");
+  // Same matching as the MCP download: case-insensitive exact, then unique substring.
+  // Clients still cannot supply download URLs; only names from this note resolve.
+  const attachment = selectAttachment(attachments, id, fileName);
   return withRetry(async () => {
     signal.throwIfAborted();
     const watchdog = inactivityWatchdog(config.apiTimeoutMs);
