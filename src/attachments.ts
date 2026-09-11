@@ -567,6 +567,14 @@ export async function downloadAttachment(
 /** Browser downloads stay in memory; the MCP's disk-based download remains unchanged. */
 export interface AttachmentBytes { fileName: string; data: Buffer }
 
+/** Headers plus a live body; the SAP queue is released before the caller drains the stream. */
+export interface AttachmentStream {
+  fileName: string;
+  contentType: string;
+  sizeBytes?: number;
+  body: ReadableStream<Uint8Array>;
+}
+
 export async function readAttachmentBytes(response: Response, signal: AbortSignal, touch: () => void, maxBytes = MAX_DOWNLOAD_BYTES): Promise<Buffer> {
   const reader = response.body?.getReader();
   if (!reader) throw new PublicError("Attachment response has no body.");
@@ -593,7 +601,65 @@ export async function readAttachmentBytes(response: Response, signal: AbortSigna
   }
 }
 
-export async function downloadAttachmentBytes(session: SapSession, config: Config, id: string, fileName: string, signal: AbortSignal): Promise<AttachmentBytes> {
+/** Caps the body, re-arms the inactivity watchdog, and settles it when the stream ends. */
+export function limitResponseBody(
+  response: Response,
+  signal: AbortSignal,
+  touch: () => void,
+  maxBytes: number,
+  onSettle: () => void,
+): ReadableStream<Uint8Array> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    onSettle();
+    throw new PublicError("Attachment response has no body.");
+  }
+  let bytes = 0;
+  let settled = false;
+  const settle = (): void => {
+    if (settled) return;
+    settled = true;
+    onSettle();
+  };
+  return new ReadableStream({
+    async pull(controller) {
+      try {
+        signal.throwIfAborted();
+        const { done, value } = await reader.read();
+        if (done) {
+          settle();
+          controller.close();
+          return;
+        }
+        touch();
+        bytes += value.byteLength;
+        if (bytes > maxBytes) {
+          await reader.cancel().catch(() => undefined);
+          settle();
+          controller.error(new PublicError("Attachment exceeds download size limit."));
+          return;
+        }
+        controller.enqueue(value);
+      } catch (error) {
+        await reader.cancel().catch(() => undefined);
+        settle();
+        controller.error(error);
+      }
+    },
+    async cancel() {
+      settle();
+      await reader.cancel().catch(() => undefined);
+    },
+  });
+}
+
+export async function openAttachmentStream(
+  session: SapSession,
+  config: Config,
+  id: string,
+  fileName: string,
+  signal: AbortSignal,
+): Promise<AttachmentStream> {
   const attachments = await fetchAttachmentList(session, config, id);
   signal.throwIfAborted();
   // Same matching as the MCP download: case-insensitive exact, then unique substring.
@@ -608,18 +674,44 @@ export async function downloadAttachmentBytes(session: SapSession, config: Confi
       response = await fetchAllowedAttachment(attachment.url, url =>
         isTrustedAttachmentCookieHost(url, config.attachmentCookieHosts) ? session.cookieHeader(url) : Promise.resolve(""), combined);
       watchdog.touch();
-      assertUsableAttachmentResponse(response.status, response.url, response.ok, response.headers.get("content-type") ?? "", attachment.fileName);
-      const data = await readAttachmentBytes(response, combined, () => watchdog.touch());
-      return { fileName: sanitizeFileName(attachment.fileName), data };
+      const contentType = response.headers.get("content-type") ?? "";
+      assertUsableAttachmentResponse(response.status, response.url, response.ok, contentType, attachment.fileName);
+      const declared = Number(response.headers.get("content-length"));
+      if (Number.isFinite(declared) && declared > MAX_DOWNLOAD_BYTES) {
+        throw new PublicError(`Attachment is ${declared} bytes — exceeds the ${MAX_DOWNLOAD_BYTES}-byte limit.`);
+      }
+      const body = limitResponseBody(response, combined, () => watchdog.touch(), MAX_DOWNLOAD_BYTES, () => watchdog.clear());
+      return {
+        fileName: sanitizeFileName(attachment.fileName),
+        contentType,
+        ...(Number.isFinite(declared) && declared > 0 ? { sizeBytes: declared } : {}),
+        body,
+      };
     } catch (error) {
+      watchdog.clear();
+      await response?.body?.cancel().catch(() => undefined);
       signal.throwIfAborted();
       if (watchdog.signal.aborted) throw new PublicError("Attachment download ETIMEDOUT", { cause: error });
       throw error;
-    } finally {
-      watchdog.clear();
-      await response?.body?.cancel().catch(() => undefined);
     }
   });
+}
+
+export async function downloadAttachmentBytes(session: SapSession, config: Config, id: string, fileName: string, signal: AbortSignal): Promise<AttachmentBytes> {
+  const stream = await openAttachmentStream(session, config, id, fileName, signal);
+  const reader = stream.body.getReader();
+  const chunks: Buffer[] = [];
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(Buffer.from(value));
+    }
+    return { fileName: stream.fileName, data: Buffer.concat(chunks) };
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    for (const chunk of chunks) chunk.fill(0);
+  }
 }
 
 async function transferAttachment(

@@ -25,11 +25,38 @@ export interface VaultData { credentials?: Credentials; session?: SessionState; 
  */
 export const MAX_HISTORY = 500;
 function trimHistory(data: VaultData): void { if (data.history.length > MAX_HISTORY) data.history.length = MAX_HISTORY; }
-const dataSchema = z.object({ credentials: credentialsSchema.optional(), session: z.custom<SessionState>(isUsableStorageState).optional(), history: z.array(historySchema), favorites: z.array(favoriteSchema).max(MAX_FAVORITES).default([]) }).strict();
-const envelopeSchema = z.object({ version: z.literal(1), salt: z.string().regex(/^[a-f0-9]{32}$/), iv: z.string().regex(/^[a-f0-9]{24}$/), tag: z.string().regex(/^[a-f0-9]{32}$/), ciphertext: z.string().regex(/^[a-f0-9]+$/) }).strict();
-const aad = Buffer.from("sap-notes-web:v1");
+const sessionStateSchema = z.custom<SessionState>(isUsableStorageState);
+const mainSchema = z.object({ credentials: credentialsSchema.optional(), history: z.array(historySchema), favorites: z.array(favoriteSchema).max(MAX_FAVORITES).default([]) }).strict();
+const dataSchema = mainSchema.extend({ session: sessionStateSchema.optional() }).strict();
+const hexSalt = z.string().regex(/^[a-f0-9]{32}$/);
+const blobSchema = z.object({ iv: z.string().regex(/^[a-f0-9]{24}$/), tag: z.string().regex(/^[a-f0-9]{32}$/), ciphertext: z.string().regex(/^[a-f0-9]+$/) }).strict();
+const envelopeSchema = z.discriminatedUnion("version", [
+  z.object({ version: z.literal(1), salt: hexSalt, iv: blobSchema.shape.iv, tag: blobSchema.shape.tag, ciphertext: blobSchema.shape.ciphertext }).strict(),
+  z.object({ version: z.literal(2), salt: hexSalt, iv: blobSchema.shape.iv, tag: blobSchema.shape.tag, ciphertext: blobSchema.shape.ciphertext, session: blobSchema.optional() }).strict(),
+]);
+const aadV1 = Buffer.from("sap-notes-web:v1");
+const aadMain = Buffer.from("sap-notes-web:v2:main");
+const aadSession = Buffer.from("sap-notes-web:v2:session");
 function derive(password: string, salt: Buffer): Promise<Buffer> {
   return new Promise((resolve, reject) => scrypt(password, salt, 32, { N: 131072, r: 8, p: 1, maxmem: 256 * 1024 * 1024 }, (error, key) => error ? reject(error) : resolve(key)));
+}
+function encryptJson(key: Buffer, aad: Buffer, value: unknown): { iv: string; tag: string; ciphertext: string } {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv, { authTagLength: 16 });
+  cipher.setAAD(aad);
+  const clear = Buffer.from(JSON.stringify(value));
+  try {
+    const ciphertext = Buffer.concat([cipher.update(clear), cipher.final()]);
+    return { iv: iv.toString("hex"), tag: cipher.getAuthTag().toString("hex"), ciphertext: ciphertext.toString("hex") };
+  } finally { clear.fill(0); }
+}
+function decryptJson(key: Buffer, aad: Buffer, blob: { iv: string; tag: string; ciphertext: string }): unknown {
+  const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(blob.iv, "hex"), { authTagLength: 16 });
+  decipher.setAAD(aad);
+  decipher.setAuthTag(Buffer.from(blob.tag, "hex"));
+  const clear = Buffer.concat([decipher.update(Buffer.from(blob.ciphertext, "hex")), decipher.final()]);
+  try { return JSON.parse(clear.toString("utf8")) as unknown; }
+  finally { clear.fill(0); }
 }
 
 /** One encrypted document, atomic replacement, and an in-process mutation queue. */
@@ -37,6 +64,8 @@ export class Vault {
   private key?: Buffer;
   private salt?: Buffer;
   private data?: VaultData;
+  /** Last encrypted session blob; reused when update() keeps the same session object. */
+  private sessionBlob?: { iv: string; tag: string; ciphertext: string };
   private epoch = 0;
   private queue: Promise<unknown> = Promise.resolve();
   constructor(readonly path: string) {}
@@ -68,14 +97,20 @@ export class Vault {
     return task;
   }
   private async write(data: VaultData, key: Buffer, salt: Buffer, exclusive = false): Promise<void> {
-    const iv = randomBytes(12);
-    const cipher = createCipheriv("aes-256-gcm", key, iv, { authTagLength: 16 });
-    cipher.setAAD(aad);
-    const clear = Buffer.from(JSON.stringify(data));
-    let ciphertext: Buffer;
-    try { ciphertext = Buffer.concat([cipher.update(clear), cipher.final()]); }
-    finally { clear.fill(0); }
-    const payload = JSON.stringify({ version: 1, salt: salt.toString("hex"), iv: iv.toString("hex"), tag: cipher.getAuthTag().toString("hex"), ciphertext: ciphertext.toString("hex") });
+    const main = encryptJson(key, aadMain, { credentials: data.credentials, history: data.history, favorites: data.favorites });
+    let sessionField: { iv: string; tag: string; ciphertext: string } | undefined;
+    if (data.session !== undefined) {
+      const reuse = this.sessionBlob !== undefined && this.key === key && this.data?.session === data.session;
+      sessionField = reuse ? this.sessionBlob : encryptJson(key, aadSession, data.session);
+    }
+    const payload = JSON.stringify({
+      version: 2,
+      salt: salt.toString("hex"),
+      iv: main.iv,
+      tag: main.tag,
+      ciphertext: main.ciphertext,
+      ...(sessionField ? { session: sessionField } : {}),
+    });
     await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
     await chmod(dirname(this.path), 0o700);
     const temporary = `${this.path}.${randomBytes(12).toString("hex")}.tmp`;
@@ -88,6 +123,7 @@ export class Vault {
       if (exclusive && await this.exists()) throw new WebError("EXISTS", "Der Tresor existiert bereits.", 409);
       await rename(temporary, this.path);
     } finally { await rm(temporary, { force: true }); }
+    this.sessionBlob = sessionField;
   }
   async setup(password: string): Promise<void> {
     const epoch = this.epoch;
@@ -114,16 +150,22 @@ export class Vault {
         const envelope = envelopeSchema.parse(JSON.parse(await readFile(this.path, "utf8")) as unknown);
         const salt = Buffer.from(envelope.salt, "hex");
         key = await derive(password, salt);
-        const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(envelope.iv, "hex"), { authTagLength: 16 });
-        decipher.setAAD(aad);
-        decipher.setAuthTag(Buffer.from(envelope.tag, "hex"));
-        const clear = Buffer.concat([decipher.update(Buffer.from(envelope.ciphertext, "hex")), decipher.final()]);
+        const blob = { iv: envelope.iv, tag: envelope.tag, ciphertext: envelope.ciphertext };
         let data: VaultData;
-        try { data = dataSchema.parse(JSON.parse(clear.toString("utf8")) as unknown); }
-        finally { clear.fill(0); }
+        let sessionBlob: { iv: string; tag: string; ciphertext: string } | undefined;
+        if (envelope.version === 1) {
+          data = dataSchema.parse(decryptJson(key, aadV1, blob));
+        } else {
+          const main = mainSchema.parse(decryptJson(key, aadMain, blob));
+          const session = envelope.session === undefined
+            ? undefined
+            : sessionStateSchema.parse(decryptJson(key, aadSession, envelope.session));
+          data = { ...main, session };
+          sessionBlob = envelope.session;
+        }
         trimHistory(data);
         if (epoch !== this.epoch) throw locked();
-        this.key?.fill(0); this.key = Buffer.from(key); this.salt = salt; this.data = data;
+        this.key?.fill(0); this.key = Buffer.from(key); this.salt = salt; this.data = data; this.sessionBlob = sessionBlob;
       } catch (error) {
         if (error instanceof WebError) throw error;
         throw new WebError("UNLOCK_FAILED", "Master-Passwort falsch oder Tresor nicht lesbar.", 401);
@@ -133,8 +175,14 @@ export class Vault {
   async update(change: (data: VaultData) => void): Promise<void> {
     const epoch = this.epoch;
     return this.serial(async () => {
-      if (epoch !== this.epoch || !this.key || !this.salt) throw locked();
-      const next = this.snapshot();
+      if (epoch !== this.epoch || !this.key || !this.salt || !this.data) throw locked();
+      // Keep the session object identity so write() can reuse its ciphertext.
+      const next: VaultData = {
+        credentials: this.data.credentials,
+        session: this.data.session,
+        history: this.data.history.slice(),
+        favorites: this.data.favorites.slice(),
+      };
       change(next);
       trimHistory(next);
       dataSchema.parse(next);
@@ -162,6 +210,6 @@ export class Vault {
       } finally { key.fill(0); }
     });
   }
-  lock(): void { this.epoch++; this.key?.fill(0); this.key = undefined; this.salt = undefined; this.data = undefined; }
+  lock(): void { this.epoch++; this.key?.fill(0); this.key = undefined; this.salt = undefined; this.data = undefined; this.sessionBlob = undefined; }
   async settled(): Promise<void> { await this.queue; }
 }

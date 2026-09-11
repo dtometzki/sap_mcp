@@ -7,6 +7,23 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.14.0] – 2026-09-11
+
+### Hinzugefügt
+- Auto-Login und Prefill auf regionalen SAP-IdP-Hosts
+  (`eu.accounts.sap.com` und andere Subdomains von `accounts.sap.com` /
+  `accounts.sap.cn`, weiter nur HTTPS Port 443). Kampagnen- und Portal-Hosts
+  bleiben ausgeschlossen.
+
+### Geändert
+- Web-App: Anhang-Downloads streamen zum Browser, statt bis 100 MiB im
+  Arbeitsspeicher zu puffern. Die SAP-Warteschlange ist nach den Response-
+  Headern frei; Suche und Status laufen während des Transfers weiter.
+  Sperren bricht den Stream weiterhin ab.
+- Tresor-Format v2: Session-Cookies liegen in einem eigenen Ciphertext.
+  Suchverlauf schreibt nur noch den kleinen Hauptdatensatz neu. v1-Tresore
+  werden beim nächsten Schreiben umgeschrieben.
+
 ## [1.13.2] – 2026-09-11
 
 ### Behoben

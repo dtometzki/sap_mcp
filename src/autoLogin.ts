@@ -90,8 +90,8 @@ function assertTrustedLoginPage(page: Page): void {
   if (isAllowedLoginUrl(url)) return;
   throw new AutoLoginError(
     `Refusing to enter credentials outside the approved identity-provider origins. ` +
-      `Automatic login only types on https://accounts.sap.com / https://accounts.sap.cn. ` +
-      `Check SAP_PROBE_URL.`,
+      `Automatic login only types on https://accounts.sap.com / https://accounts.sap.cn ` +
+      `and their subdomains (e.g. eu.accounts.sap.com). Check SAP_PROBE_URL.`,
     true,
   );
 }

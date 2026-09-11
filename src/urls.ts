@@ -11,7 +11,13 @@ import { PublicError } from "./errors.js";
 /** Browser pages, session probe, token endpoint, note/search URLs. */
 export const PAGE_HOST_ROOTS = ["sap.com", "sap.cn"] as const;
 
-/** Exact identity-provider origins; portal/campaign sites must never receive passwords. */
+/**
+ * Identity-provider hosts, including regional subdomains such as eu.accounts.sap.com.
+ * Portal and campaign sites (me.sap.com, campaign.sap.com) must never receive passwords.
+ */
+export const LOGIN_HOST_ROOTS = ["accounts.sap.com", "accounts.sap.cn"] as const;
+
+/** Exact apex origins; kept for callers that compare origin strings. */
 export const LOGIN_ORIGINS = ["https://accounts.sap.com", "https://accounts.sap.cn"] as const;
 
 /** Direct HTTP APIs: the portal hosts plus Coveo (the note search backend). */
@@ -57,8 +63,9 @@ export function isAllowedPageUrl(url: string): boolean {
 }
 
 export function isAllowedLoginUrl(url: string): boolean {
-  const parsed = parseAllowedHttpsUrl(url, PAGE_HOST_ROOTS);
-  return parsed !== undefined && LOGIN_ORIGINS.some((origin) => parsed.origin === origin);
+  const parsed = parseAllowedHttpsUrl(url, LOGIN_HOST_ROOTS);
+  // Default HTTPS port only — :8443 is not the SAP identity provider.
+  return parsed !== undefined && (parsed.port === "" || parsed.port === "443");
 }
 
 export function isAllowedApiUrl(url: string): boolean {
