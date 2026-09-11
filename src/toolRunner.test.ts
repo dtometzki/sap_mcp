@@ -163,6 +163,20 @@ test("shutdown closes once and is idempotent", async () => {
   assert.equal(calls.filter((call) => call === "close").length, 1);
 });
 
+test("shutdown does not schedule an idle close after a finishing execute", async () => {
+  const { deps, calls } = createDeps();
+  const runner = new ToolRunner(deps, { idleTimeoutMs: 20, stateSaveIntervalMs: 60_000 });
+  const running = runner.execute(async () => {
+    await sleep(5);
+    return 1;
+  }, String);
+  await runner.shutdown(1_000);
+  await running;
+  const closes = calls.filter((call) => call === "close").length;
+  await sleep(80);
+  assert.equal(calls.filter((call) => call === "close").length, closes);
+});
+
 test("execute retries once after an automatic re-login", async () => {
   let attempts = 0;
   const { deps, calls } = createDeps({

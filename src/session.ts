@@ -226,16 +226,23 @@ export interface SessionStore {
  * One instance per process; the MCP server keeps it alive between tool calls
  * so the SAP backend does not see a login storm.
  */
+/** Injectable so start/close races can be tested without launching Chromium. */
+export type CreateBrowser = () => Promise<Pick<Browser, "newContext" | "close">>;
+
 export class SapSession {
-  private browser: Browser | undefined;
+  private browser: Pick<Browser, "newContext" | "close"> | undefined;
   private context: BrowserContext | undefined;
   /** Memoized so concurrent callers share one launch instead of racing two browsers. */
   private startPromise: Promise<void> | undefined;
+  private closePromise: Promise<void> | undefined;
+  /** Bumped on every close so an in-flight launch discards the browser it just created. */
+  private generation = 0;
 
   constructor(
     private readonly config: Config,
     private readonly headless: boolean,
     private readonly store?: SessionStore,
+    private readonly createBrowser: CreateBrowser = () => chromium.launch({ headless: this.headless }),
   ) {}
 
   /**
@@ -251,6 +258,7 @@ export class SapSession {
   }
 
   private async doStart({ allowMissingState, ignoreStoredState }: StartOptions): Promise<void> {
+    const gen = this.generation;
     if (this.context) return;
 
     const stored = !ignoreStoredState && this.store ? await this.store.load() : undefined;
@@ -260,23 +268,37 @@ export class SapSession {
     if (!hasState && this.headless && !allowMissingState) {
       throw new SessionExpiredError();
     }
+    if (gen !== this.generation) return;
 
-    this.browser = await chromium.launch({ headless: this.headless });
+    const browser = await this.createBrowser();
+    if (gen !== this.generation) {
+      await browser.close().catch(() => undefined);
+      return;
+    }
+    this.browser = browser;
     try {
-      this.context = await this.browser.newContext({
+      const context = await browser.newContext({
         storageState: hasState ? (this.store ? stored : this.config.storageStatePath) : undefined,
         viewport: { width: 1440, height: 900 },
         locale: "en-US",
         // Tool downloads go through fetchAllowedAttachment, not the browser.
         acceptDownloads: false,
       });
+      if (gen !== this.generation) {
+        await context.close().catch(() => undefined);
+        await browser.close().catch(() => undefined);
+        this.browser = undefined;
+        return;
+      }
+      context.setDefaultNavigationTimeout(this.config.navigationTimeoutMs);
+      this.context = context;
     } catch (error) {
       // Do not leak the browser process if the context (e.g. corrupt state file) fails.
-      await this.browser.close().catch(() => undefined);
+      await browser.close().catch(() => undefined);
       this.browser = undefined;
+      this.context = undefined;
       throw error;
     }
-    this.context.setDefaultNavigationTimeout(this.config.navigationTimeoutMs);
   }
 
   /**
@@ -297,12 +319,14 @@ export class SapSession {
       if (response?.status() === 403) {
         throw new AccessDeniedError("Portal page");
       }
-      await page
-        .waitForLoadState("networkidle", { timeout: this.config.networkIdleTimeoutMs })
-        .catch(() => {
-          // The portal keeps polling connections open; a timeout here is expected
-          // and harmless as long as the DOM is already rendered.
-        });
+      if (this.config.networkIdleTimeoutMs > 0) {
+        await page
+          .waitForLoadState("networkidle", { timeout: this.config.networkIdleTimeoutMs })
+          .catch(() => {
+            // The portal keeps polling connections open; a timeout here is expected
+            // and harmless as long as the DOM is already rendered.
+          });
+      }
       // Wait for a plausible content container instead of a blind sleep; proceeds
       // immediately once the SPA renders, falls back to the timeout otherwise.
       await page
@@ -454,11 +478,24 @@ export class SapSession {
   }
 
   async close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    const done = this.doClose().finally(() => {
+      if (this.closePromise === done) this.closePromise = undefined;
+    });
+    this.closePromise = done;
+    return done;
+  }
+
+  private async doClose(): Promise<void> {
+    this.generation += 1;
+    const starting = this.startPromise;
+    await starting?.catch(() => undefined);
+    if (this.startPromise === starting) this.startPromise = undefined;
+
     const context = this.context;
     const browser = this.browser;
     this.context = undefined;
     this.browser = undefined;
-    this.startPromise = undefined;
 
     let closeError: Error | undefined;
     try {

@@ -129,6 +129,7 @@ export class ToolRunner {
    * relaunches the browser and re-reads the stored session state.
    */
   scheduleIdleClose(): void {
+    if (this.isShuttingDown) return;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     if (this.options.idleTimeoutMs <= 0) return; // 0 disables the idle shutdown
     this.idleTimer = setTimeout(() => {

@@ -7,6 +7,30 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.13.2] – 2026-09-11
+
+### Behoben
+- `SapSession.close()` wartet auf einen laufenden Browser-Start und verwirft
+  den Launch, damit Idle-Lock, Abbruch und Auto-Login kein Chromium leaken.
+- DOM-Such-Fallback übernimmt nicht mehr die gescrapten Treffer-URLs, sondern
+  baut sie über `SAP_NOTE_URL` (fremde `/notes/<id>`-Links werden nicht als
+  Quelle angezeigt).
+- Web-Downloads wählen Anhänge wie der MCP-Pfad (Groß/Kleinschreibung und
+  eindeutiger Teilstring), statt nur auf exakte API-Dateinamen zu prüfen.
+- Untrusted-Wrapper für Portaltext nutzen einen zufälligen Nonce in den
+  Delimitern, damit ein gefälschtes `END`-Marker im Inhalt den Block nicht
+  vorzeitig schließt.
+- Web-App: Blob-URLs für Anhänge bleiben bis zum Sperren bzw. `pagehide`
+  gültig; ein Speicherdialog nach 1 s verliert die Datei nicht mehr.
+
+### Geändert
+- Portal-Seiten warten nicht mehr standardmäßig 4 s auf `networkidle`
+  (`SAP_NETWORK_IDLE_TIMEOUT_MS=0`). Note-Abruf und DOM-Fallbacks warten
+  weiter auf den gerenderten Inhalt.
+- Playwright-`TimeoutError` und `Timeout …ms exceeded` werden einmal
+  retried, analog zu Netzfehlern.
+- Nach `ToolRunner.shutdown()` wird kein Idle-Close mehr geplant.
+
 ## [1.13.1] – 2026-09-09
 
 ### Hinzugefügt

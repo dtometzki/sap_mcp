@@ -42,8 +42,9 @@ export interface Config {
    */
   apiTimeoutMs: number;
   /**
-   * Milliseconds to wait for "networkidle". The portal keeps polling connections
-   * open, so this almost always times out; keep it short so we do not block on it.
+   * Milliseconds to wait for "networkidle" after opening a portal page.
+   * The portal keeps polling connections open, so this almost always times out.
+   * 0 skips the wait (default): callers wait for real content instead.
    */
   networkIdleTimeoutMs: number;
   /** Extra settle time after network idle, for late client-side rendering. */
@@ -236,7 +237,7 @@ export function loadConfig(): Config {
     sessionProbeUrl,
     navigationTimeoutMs: intFromEnv("SAP_NAV_TIMEOUT_MS", 60_000),
     apiTimeoutMs: intFromEnv("SAP_API_TIMEOUT_MS", 60_000),
-    networkIdleTimeoutMs: intFromEnv("SAP_NETWORK_IDLE_TIMEOUT_MS", 4_000),
+    networkIdleTimeoutMs: intFromEnv("SAP_NETWORK_IDLE_TIMEOUT_MS", 0, 0),
     renderSettleMs: intFromEnv("SAP_RENDER_SETTLE_MS", 2_500),
     idleTimeoutMs: intFromEnv("SAP_IDLE_TIMEOUT_MS", 10 * 60_000, 0),
     username,

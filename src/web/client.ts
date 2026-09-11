@@ -149,7 +149,6 @@ function attachmentDownloadButton(number: string, fileName: string, sequence: nu
       const url = URL.createObjectURL(value.blob); downloadUrls.add(url);
       const link = node("a"); link.href = url; link.download = value.fileName;
       document.body.append(link); link.click(); link.remove();
-      window.setTimeout(() => { URL.revokeObjectURL(url); downloadUrls.delete(url); }, 1000);
       message(`„${value.fileName}“ wurde an den Browser übergeben. Falls ein Speicherdialog erscheint, mit „Sichern“ bestätigen.`);
     } finally { button.textContent = label; }
   }, button); });
