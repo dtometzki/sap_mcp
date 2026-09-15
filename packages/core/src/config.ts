@@ -1,7 +1,7 @@
 import { PublicError } from "./errors.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { envKeysFromFile } from "./env.js";
+import { envKeysFromFile, PASSWORD_ENV_KEYS, USERNAME_ENV_KEYS } from "./env.js";
 import { isAllowedApiUrl, isAllowedPageUrl } from "./urls.js";
 
 /**
@@ -149,17 +149,28 @@ export function boolFromEnv(name: string, fallback: boolean): boolean {
  * `SAP_USERNAME=... npm start` would silently keep using the SAPUSER from the file.
  * Within the same origin the order of `names` decides.
  *
- * Empty strings count as "not set" — an empty SAPPASSWORD= line must not start a login attempt.
+ * Empty or blank strings count as "not set" — an empty SAPPASSWORD= line must not start
+ * a login attempt. Values are trimmed unless `keepWhitespace` is set: a password may
+ * legitimately end in a space (quoted in .env), and trimming it would only produce a
+ * rejected login that is hard to explain.
  */
-function stringFromEnv(...names: string[]): string | undefined {
+function stringFromEnv(
+  names: readonly string[],
+  { keepWhitespace = false }: { keepWhitespace?: boolean } = {},
+): string | undefined {
   const fromFile = envKeysFromFile();
+  const read = (name: string): string | undefined => {
+    const raw = process.env[name];
+    if (raw === undefined || raw.trim() === "") return undefined;
+    return keepWhitespace ? raw : raw.trim();
+  };
   for (const name of names) {
-    const value = process.env[name]?.trim();
-    if (value && !fromFile.has(name)) return value;
+    const value = read(name);
+    if (value !== undefined && !fromFile.has(name)) return value;
   }
   for (const name of names) {
-    const value = process.env[name]?.trim();
-    if (value) return value;
+    const value = read(name);
+    if (value !== undefined) return value;
   }
   return undefined;
 }
@@ -200,8 +211,8 @@ export function loadConfig(): Config {
     throw new PublicError(`SAP_COVEO_ORG must contain only letters, digits and hyphens`);
   }
   // SAPUSER/SAPPASSWORD are the documented names; the older SAP_* spellings stay valid.
-  const username = stringFromEnv("SAPUSER", "SAP_USERNAME");
-  const password = stringFromEnv("SAPPASSWORD", "SAP_PASSWORD");
+  const username = stringFromEnv(USERNAME_ENV_KEYS);
+  const password = stringFromEnv(PASSWORD_ENV_KEYS, { keepWhitespace: true });
   const searchUrlTemplate =
     process.env.SAP_SEARCH_URL ?? "https://me.sap.com/search?q={query}&tab=notes";
   const coveoTokenUrl =

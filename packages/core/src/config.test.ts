@@ -92,6 +92,23 @@ test("an exported alias beats a preferred name that only came from the .env file
   }
 });
 
+test("a password keeps its surrounding whitespace, a user id does not", () => {
+  try {
+    clearCredentialVars();
+    process.env.SAPUSER = "  S0001234567 ";
+    process.env.SAPPASSWORD = " secret with spaces ";
+    const config = loadConfig();
+    assert.equal(config.username, "S0001234567");
+    assert.equal(config.password, " secret with spaces ");
+    // Blank values still count as "not set".
+    process.env.SAPPASSWORD = "   ";
+    assert.equal(loadConfig().password, undefined);
+    assert.equal(loadConfig().autoLoginEnabled, false);
+  } finally {
+    clearCredentialVars();
+  }
+});
+
 test("within one origin the preferred spelling wins", () => {
   try {
     clearCredentialVars();

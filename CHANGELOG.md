@@ -7,6 +7,30 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.15.1] – 2026-09-15
+
+### Behoben
+- Dateinamen von Anhängen: Bidi- und Zero-Width-Zeichen (z. B. `U+202E`, mit denen
+  sich eine Endung wie `.exe` als `.pdf` tarnen lässt) werden entfernt; unter Windows
+  ungültige Zeichen (`<>:"|?*`), abschließende Punkte/Leerzeichen und Gerätenamen
+  (`CON`, `NUL`, `COM1` …) werden neutralisiert, damit der Download nicht scheitert.
+- `SAPPASSWORD` behält führende/abschließende Leerzeichen (in `.env` in Anführungszeichen);
+  bisher wurde das Passwort stillschweigend getrimmt. Der S-User wird weiterhin getrimmt,
+  leere Werte gelten weiter als „nicht gesetzt“.
+- `web:start` registriert Exit-/Fehler-Handler des Kindprozesses vor dem ersten `await`,
+  damit ein sofortiges Beenden nicht übersehen und ein Spawn-Fehler nicht als
+  unbehandeltes Ereignis den Starter abbricht. Ein bereits vorhandenes `web.log` wird auf
+  `0600` gesetzt.
+
+### Geändert
+- Gemeinsame `withDomFallback`-Strategie für Suche (Coveo → Trefferseite) und
+  Anhangsliste (Detail-API → Note-Seite) statt zweier identischer Fehlerpfade.
+- Tresor liefert `credentials` und `session` einzeln; der Gateway-Start klont nicht mehr
+  den gesamten Tresorinhalt.
+- Nicht mehr genutzte In-Memory-Downloads (`readAttachmentBytes`,
+  `downloadAttachmentBytes`) und `LOGIN_ORIGINS` entfernt; der Transfer-Test läuft jetzt
+  gegen den Streaming-Pfad `openAttachmentStream`.
+
 ## [1.15.0] – 2026-09-15
 
 ### Hinzugefügt

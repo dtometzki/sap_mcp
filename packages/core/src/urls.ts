@@ -17,9 +17,6 @@ export const PAGE_HOST_ROOTS = ["sap.com", "sap.cn"] as const;
  */
 export const LOGIN_HOST_ROOTS = ["accounts.sap.com", "accounts.sap.cn"] as const;
 
-/** Exact apex origins; kept for callers that compare origin strings. */
-export const LOGIN_ORIGINS = ["https://accounts.sap.com", "https://accounts.sap.cn"] as const;
-
 /** Direct HTTP APIs: the portal hosts plus Coveo (the note search backend). */
 export const API_HOST_ROOTS = ["sap.com", "sap.cn", "coveo.com"] as const;
 

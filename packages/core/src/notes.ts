@@ -117,41 +117,60 @@ async function collectHits(page: Page, limit: number, noteUrlTemplate: string): 
  * the two calls directly, which is both reliable and fast (no page render needed).
  * If Coveo is unreachable we fall back to the old DOM scrape.
  */
-export async function searchNotes(
+export function searchNotes(
   session: SapSession,
   config: Config,
   query: string,
   limit: number,
 ): Promise<NoteHit[]> {
+  return withDomFallback(
+    "Search",
+    "Coveo search",
+    () => searchNotesViaCoveo(session, config, query, limit),
+    () => searchNotesViaDom(session, config, query, limit),
+  );
+}
+
+/**
+ * Two-tier strategy shared by the search (Coveo, then the rendered result page) and the
+ * attachment list (note-detail API, then the rendered note page): the direct API is the
+ * primary path, the DOM scrape only exists for the portal's next frontend rewrite.
+ *
+ * Session and authorization errors are definite answers from a working portal and skip
+ * the fallback — the scrape would only repeat the same denial. An empty scrape after an
+ * API failure is a broken backend, not "no results": reporting [] would turn it into a
+ * confident "nothing found" answer. Only a fixed diagnostic category reaches stderr.
+ */
+export async function withDomFallback<T>(
+  subject: string,
+  primaryName: string,
+  primary: () => Promise<T[]>,
+  fallback: () => Promise<T[]>,
+): Promise<T[]> {
   try {
-    return await searchNotesViaCoveo(session, config, query, limit);
+    return await primary();
   } catch (error) {
     if (error instanceof SessionExpiredError || error instanceof AccessDeniedError) throw error;
-    // Coveo (org id / token endpoint) may have changed; try the legacy scrape before giving up.
-    // Keep an actionable category on stderr without exposing library call logs.
-    console.error(`Coveo search failed, falling back to DOM scrape: ${errorMessage(error)}`);
-    let hits: NoteHit[];
+    console.error(`${primaryName} failed, falling back to DOM scrape: ${errorMessage(error)}`);
+    let results: T[];
     try {
-      hits = await searchNotesViaDom(session, config, query, limit);
+      results = await fallback();
     } catch (fallbackError) {
       if (fallbackError instanceof SessionExpiredError || fallbackError instanceof AccessDeniedError) {
         throw fallbackError;
       }
       throw new PublicError(
-        `Search failed: ${errorMessage(error)} (DOM fallback: ${errorMessage(fallbackError)})`,
+        `${subject} failed: ${errorMessage(error)} (DOM fallback: ${errorMessage(fallbackError)})`,
         { cause: error },
       );
     }
-    // An empty fallback is not evidence of "no results": the scrape only exists for the
-    // case that Coveo moved, and reporting [] here would turn a broken backend into a
-    // confident "No notes found" answer.
-    if (hits.length === 0) {
+    if (results.length === 0) {
       throw new PublicError(
-        `Search failed: ${errorMessage(error)} (the DOM fallback found nothing either)`,
+        `${subject} failed: ${errorMessage(error)} (the DOM fallback found nothing either)`,
         { cause: error },
       );
     }
-    return hits;
+    return results;
   }
 }
 

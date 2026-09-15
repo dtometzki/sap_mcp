@@ -86,6 +86,14 @@ export class Vault {
     if (!this.data || !this.key) throw locked();
     return this.data.credentials?.username;
   }
+  get credentials(): Credentials | undefined {
+    if (!this.data || !this.key) throw locked();
+    return this.data.credentials === undefined ? undefined : { ...this.data.credentials };
+  }
+  get session(): SessionState | undefined {
+    if (!this.data || !this.key) throw locked();
+    return this.data.session === undefined ? undefined : structuredClone(this.data.session);
+  }
   get history(): HistoryEntry[] {
     if (!this.data || !this.key) throw locked();
     return structuredClone(this.data.history);
