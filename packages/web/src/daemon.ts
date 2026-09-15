@@ -57,6 +57,8 @@ export async function start(envDirectories: readonly string[] = applicationEnvDi
   const logPath = webLogPath(directory);
   // 0600: the log never carries credentials, but it names notes and search terms.
   const log = await open(logPath, "a", 0o600);
+  // The mode only applies when the file is created; tighten a log that already existed.
+  await log.chmod(0o600).catch(() => undefined);
   // Carry the exact search order into the detached child (including legacy entrypoints).
   const childCode = `import { run } from ${JSON.stringify(new URL("./main.js", import.meta.url).href)}; await run(${JSON.stringify(envDirectories)});`;
   const child = spawn(process.execPath, ["--input-type=module", "--eval", childCode], {
@@ -65,12 +67,15 @@ export async function start(envDirectories: readonly string[] = applicationEnvDi
     env: process.env,
     windowsHide: true,
   });
+  // Listen before the first await: an immediate exit (or a spawn failure, which would
+  // otherwise be an unhandled "error" event) must not slip through while the log closes.
+  let exitCode: number | null | undefined;
+  child.once("exit", (code) => { exitCode = code; });
+  child.once("error", () => { exitCode ??= null; });
   child.unref();
   await log.close();
 
   const deadline = Date.now() + START_TIMEOUT_MS;
-  let exitCode: number | null | undefined;
-  child.once("exit", (code) => { exitCode = code; });
   while (Date.now() < deadline) {
     if (exitCode !== undefined) break;
     if (await responds(port)) {

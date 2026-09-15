@@ -11,14 +11,13 @@ import {
   isTrustedAttachmentCookieHost,
 } from "./urls.js";
 import {
-  AccessDeniedError,
   SessionExpiredError,
   assertNotLoggedOut,
   ensurePrivateDirectory,
   looksLikeLoginPage,
   type SapSession,
 } from "./session.js";
-import { coerceField, errorMessage, withRetry, wrapUntrustedPortalContent } from "./notes.js";
+import { coerceField, withDomFallback, withRetry, wrapUntrustedPortalContent } from "./notes.js";
 
 export interface NoteAttachment {
   fileName: string;
@@ -237,14 +236,26 @@ async function readInlineText(filePath: string, totalBytes: number): Promise<{
   }
 }
 
-/** Keeps the original name recognizable while preventing path traversal and control chars. */
+/** Windows device names: "CON.txt" still opens the console there. */
+const RESERVED_DEVICE_NAME_PATTERN = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;
+
+/**
+ * Keeps the original name recognizable while preventing path traversal, control and
+ * bidi/zero-width characters (a portal name such as "report\u202Efdp.exe" renders as
+ * "reportexe.pdf" in file managers), and names that are invalid or special on Windows.
+ */
 export function sanitizeFileName(name: string): string {
   const cleaned = name
     .replace(/[\\/]+/g, "_")
-    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/[\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "")
+    .replace(/[<>:"|?*]/g, "_")
     .trim()
-    .replace(/^\.+/, "");
-  return cleaned.slice(0, 200) || "attachment";
+    .replace(/^\.+/, "")
+    .slice(0, 200)
+    // Trailing dots and spaces are dropped silently by Windows, which changes the name.
+    .replace(/[. ]+$/, "");
+  if (cleaned === "") return "attachment";
+  return RESERVED_DEVICE_NAME_PATTERN.test(cleaned) ? `_${cleaned}` : cleaned;
 }
 
 const TEXT_EXTENSION_PATTERN =
@@ -439,39 +450,14 @@ export async function fetchAttachmentList(
   config: Config,
   id: string,
 ): Promise<NoteAttachment[]> {
-  try {
-    return (await fetchAttachmentsViaApi(session, config, id)).filter((attachment) =>
-      isAllowedAttachmentHost(attachment.url),
-    );
-  } catch (error) {
-    // Both are definite answers from a working portal; the DOM scrape only exists for
-    // the case that the API moved, and would just repeat the same denial.
-    if (error instanceof SessionExpiredError || error instanceof AccessDeniedError) throw error;
-    console.error(`Note detail API failed, falling back to DOM scrape: ${errorMessage(error)}`);
-    let attachments: NoteAttachment[];
-    try {
-      attachments = await fetchAttachmentsViaDom(session, config, id);
-    } catch (fallbackError) {
-      if (fallbackError instanceof SessionExpiredError || fallbackError instanceof AccessDeniedError) {
-        throw fallbackError;
-      }
-      throw new PublicError(
-        `Attachment list for note ${id} failed: ${errorMessage(error)} ` +
-          `(DOM fallback: ${errorMessage(fallbackError)})`,
-        { cause: error },
-      );
-    }
-    // Same reasoning as searchNotes: an empty scrape after a failed API call is a broken
-    // backend, not a note without attachments — do not report it as "no attachments".
-    if (attachments.length === 0) {
-      throw new PublicError(
-        `Attachment list for note ${id} failed: ${errorMessage(error)} ` +
-          `(the DOM fallback found nothing either)`,
-        { cause: error },
-      );
-    }
-    return attachments.filter((attachment) => isAllowedAttachmentHost(attachment.url));
-  }
+  const attachments = await withDomFallback(
+    `Attachment list for note ${id}`,
+    "Note detail API",
+    () => fetchAttachmentsViaApi(session, config, id),
+    () => fetchAttachmentsViaDom(session, config, id),
+  );
+  // Both sources already filter; kept as the last line of defence before a download.
+  return attachments.filter((attachment) => isAllowedAttachmentHost(attachment.url));
 }
 
 /** Client-facing list: names and sizes only — download URLs stay inside the process. */
@@ -564,41 +550,12 @@ export async function downloadAttachment(
   });
 }
 
-/** Browser downloads stay in memory; the MCP's disk-based download remains unchanged. */
-export interface AttachmentBytes { fileName: string; data: Buffer }
-
 /** Headers plus a live body; the SAP queue is released before the caller drains the stream. */
 export interface AttachmentStream {
   fileName: string;
   contentType: string;
   sizeBytes?: number;
   body: ReadableStream<Uint8Array>;
-}
-
-export async function readAttachmentBytes(response: Response, signal: AbortSignal, touch: () => void, maxBytes = MAX_DOWNLOAD_BYTES): Promise<Buffer> {
-  const reader = response.body?.getReader();
-  if (!reader) throw new PublicError("Attachment response has no body.");
-  const chunks: Buffer[] = [];
-  let bytes = 0;
-  const cancel = (): void => { void reader.cancel().catch(() => undefined); };
-  signal.addEventListener("abort", cancel, { once: true });
-  try {
-    signal.throwIfAborted();
-    if (Number(response.headers.get("content-length")) > maxBytes) throw new PublicError("Attachment exceeds download size limit.");
-    for (;;) {
-      const { done, value } = await reader.read();
-      signal.throwIfAborted();
-      if (done) break;
-      touch(); bytes += value.byteLength;
-      if (bytes > maxBytes) throw new PublicError("Attachment exceeds download size limit.");
-      chunks.push(Buffer.from(value));
-    }
-    return Buffer.concat(chunks, bytes);
-  } finally {
-    signal.removeEventListener("abort", cancel);
-    await reader.cancel().catch(() => undefined);
-    for (const chunk of chunks) chunk.fill(0);
-  }
 }
 
 /** Caps the body, re-arms the inactivity watchdog, and settles it when the stream ends. */
@@ -695,23 +652,6 @@ export async function openAttachmentStream(
       throw error;
     }
   });
-}
-
-export async function downloadAttachmentBytes(session: SapSession, config: Config, id: string, fileName: string, signal: AbortSignal): Promise<AttachmentBytes> {
-  const stream = await openAttachmentStream(session, config, id, fileName, signal);
-  const reader = stream.body.getReader();
-  const chunks: Buffer[] = [];
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(Buffer.from(value));
-    }
-    return { fileName: stream.fileName, data: Buffer.concat(chunks) };
-  } finally {
-    await reader.cancel().catch(() => undefined);
-    for (const chunk of chunks) chunk.fill(0);
-  }
 }
 
 async function transferAttachment(

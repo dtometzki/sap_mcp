@@ -127,10 +127,6 @@ export function envFileCandidates(directories: readonly string[] = [process.cwd(
 }
 
 /**
- * Warns (stderr, never stdout — stdout is the MCP protocol channel) when the file
- * holding the password is readable by other local users.
- */
-/**
  * Only regular files are loaded. Directories, devices and FIFOs are skipped.
  * Symlinks are followed (common for `/etc/…` → secret store) but warned about.
  */
@@ -149,6 +145,10 @@ export function inspectEnvFile(path: string): "ok" | "missing" | "not-file" {
   }
 }
 
+/**
+ * Warns (stderr, never stdout — stdout is the MCP protocol channel) when the file
+ * holding the password is readable by other local users.
+ */
 function warnOnLoosePermissions(path: string): void {
   try {
     const mode = statSync(path).mode & 0o777;

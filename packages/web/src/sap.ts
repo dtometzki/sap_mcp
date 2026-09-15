@@ -178,12 +178,12 @@ export class WebService {
     if (!this.gateway) {
       const epoch = this.epoch;
       this.gateway = this.factory({
-        load: () => { this.assert(epoch); return Promise.resolve(this.vault.snapshot().session); },
+        load: () => { this.assert(epoch); return Promise.resolve(this.vault.session); },
         save: async (state) => {
           this.assert(epoch);
           await this.vault.update(data => { this.assert(epoch); data.session = state; });
         },
-      }, this.vault.snapshot().credentials);
+      }, this.vault.credentials);
     }
     return this.gateway;
   }

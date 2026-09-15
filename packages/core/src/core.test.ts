@@ -610,6 +610,16 @@ test("sanitizeFileName prevents traversal and keeps names readable", () => {
   assert.equal(sanitizeFileName(".hidden"), "hidden");
   assert.equal(sanitizeFileName("  "), "attachment");
   assert.equal(sanitizeFileName("a".repeat(300)).length, 200);
+  // Bidi/zero-width characters could disguise the real extension in a file manager.
+  assert.equal(sanitizeFileName("report\u202Efdp.exe"), "reportfdp.exe");
+  assert.equal(sanitizeFileName("Über\u200bsicht.pdf"), "Übersicht.pdf");
+  // Windows-reserved characters, trailing dots/spaces and device names must not break the download.
+  assert.equal(sanitizeFileName('a:b*c?<d>|"e".txt'), "a_b_c__d___e_.txt");
+  assert.equal(sanitizeFileName("trailing... "), "trailing");
+  assert.equal(sanitizeFileName("CON.txt"), "_CON.txt");
+  assert.equal(sanitizeFileName("lpt1"), "_lpt1");
+  assert.equal(sanitizeFileName("console.txt"), "console.txt");
+  assert.equal(sanitizeFileName("..."), "attachment");
 });
 
 test("isTextAttachment recognizes text by content type and extension", () => {
