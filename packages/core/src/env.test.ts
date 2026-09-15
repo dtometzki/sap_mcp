@@ -5,14 +5,17 @@ import {
   envFileCandidates,
   envKeysFromFile,
   inspectEnvFile,
+  loadDotEnv,
   parseDotEnv,
   resetEnvKeysFromFile,
   scrubCredentialsFromEnv,
   scrubPasswordFromEnv,
 } from "./env.js";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { applicationEnvDirectories, applicationWorkspaceRoot } from "./runtime.js";
+import { pathToFileURL } from "node:url";
 
 test("parseDotEnv reads plain assignments and ignores comments and blank lines", () => {
   const parsed = parseDotEnv("# comment\n\nSAPUSER=S0001234567\n  SAPPASSWORD = secret \n");
@@ -75,8 +78,9 @@ test("SAP_ENV_FILE is exclusive — no silent fallback to another credentials fi
     assert.deepEqual(envFileCandidates(), ["/etc/sap-notes/prod.env"]);
 
     delete process.env.SAP_ENV_FILE;
-    const candidates = envFileCandidates();
-    assert.equal(candidates.length, 2, "package root and cwd");
+    const candidates = envFileCandidates(["/app", "/workspace", "/working"]);
+    assert.deepEqual(candidates, ["/app/.env", "/workspace/.env", "/working/.env"]);
+    assert.deepEqual(envFileCandidates(), [join(process.cwd(), ".env")]);
     assert.ok(candidates.every((path) => path.endsWith(".env")));
   } finally {
     if (previous === undefined) delete process.env.SAP_ENV_FILE;
@@ -159,6 +163,57 @@ test("inspectEnvFile accepts regular files and rejects directories", async () =>
     assert.equal(inspectEnvFile(join(directory, "missing.env")), "missing");
     assert.equal(inspectEnvFile(new URL(import.meta.url).pathname), "ok");
   } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("entrypoints choose app/workspace/cwd while legacy callers retain root/cwd", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sap-env-layout-"));
+  const app = join(directory, "packages", "mcp");
+  try {
+    await mkdir(app, { recursive: true });
+    await writeFile(join(directory, "package.json"), JSON.stringify({ name: "sap-notes-mcp", workspaces: ["packages/*"] }));
+    const url = pathToFileURL(join(app, "dist/server.js")).href;
+    assert.equal(applicationWorkspaceRoot(app), directory);
+    assert.deepEqual(applicationEnvDirectories(url), [app, directory, process.cwd()]);
+    assert.deepEqual(envFileCandidates([directory, process.cwd()]), [join(directory, ".env"), join(process.cwd(), ".env")]);
+    await rm(join(directory, "package.json"));
+    assert.equal(applicationWorkspaceRoot(app), undefined);
+    assert.deepEqual(applicationEnvDirectories(url), [app, process.cwd()]);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("explicit directories load only the first file; missing exclusive files never fall back", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sap-env-order-"));
+  const names = ["app", "workspace", "cwd"];
+  const locations = names.map(name => join(directory, name));
+  const previous = { SAP_ENV_FILE: process.env.SAP_ENV_FILE, SAP_TEST_LOCATION: process.env.SAP_TEST_LOCATION, SAP_TEST_SECOND_FILE: process.env.SAP_TEST_SECOND_FILE };
+  try {
+    delete process.env.SAP_ENV_FILE;
+    delete process.env.SAP_TEST_LOCATION;
+    delete process.env.SAP_TEST_SECOND_FILE;
+    for (const [index, location] of locations.entries()) {
+      await mkdir(location);
+      await writeFile(join(location, ".env"), `SAP_TEST_LOCATION=${names[index]}\n${index ? "SAP_TEST_SECOND_FILE=unexpected\n" : ""}`, { mode: 0o600 });
+    }
+    assert.equal(loadDotEnv(locations), join(locations[0]!, ".env"));
+    assert.equal(process.env.SAP_TEST_LOCATION, "app");
+    assert.equal(process.env.SAP_TEST_SECOND_FILE, undefined);
+    delete process.env.SAP_TEST_LOCATION;
+    assert.equal(loadDotEnv(locations.slice(1)), join(locations[1]!, ".env"));
+    assert.equal(process.env.SAP_TEST_LOCATION, "workspace");
+    process.env.SAP_TEST_LOCATION = "environment";
+    loadDotEnv(locations);
+    assert.equal(process.env.SAP_TEST_LOCATION, "environment");
+    delete process.env.SAP_TEST_LOCATION;
+    process.env.SAP_ENV_FILE = join(directory, "missing.env");
+    assert.equal(loadDotEnv(locations), undefined);
+    assert.equal(process.env.SAP_TEST_LOCATION, undefined);
+  } finally {
+    resetEnvKeysFromFile();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
     await rm(directory, { recursive: true, force: true });
   }
 });

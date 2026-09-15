@@ -7,6 +7,27 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.15.0] – 2026-09-15
+
+### Hinzugefügt
+- Separat installierbare MCP- und Web-Archive mit gebautem Code, eigener
+  Installations-Lockdatei und beigelegter Core-Bibliothek; Download über CI-Artefakte.
+- Automatisierte Prüfungen für Einzelinstallation, MCP-stdio, kompatible
+  Einstiegspunkte, Konfigurationssuche und unabhängigen Parallelbetrieb.
+
+### Geändert
+- npm-Workspaces für `@sap-notes/core`, `@sap-notes/mcp` und `@sap-notes/web`,
+  jeweils mit eigenen Build-/Testbefehlen und gemeinsamer Versionsnummer.
+- Bisherige Root-Befehle und ausführbare `dist`-Pfade bleiben als Weiterleitungen
+  gültig. Direkte App-Einstiege suchen `.env` zuerst im App-Verzeichnis, danach
+  im Workspace-Root und Arbeitsverzeichnis; alte Einstiege behalten ihre Reihenfolge.
+- Getrennte Installations- und Betriebsanleitungen; Web-Assets und About-Version
+  werden aus dem jeweiligen Anwendungspaket geladen. Datenpfade bleiben erhalten.
+
+### Behoben
+- Vault-Wiederherstellung ermittelt die Dateigröße portabel auf Linux und macOS
+  statt über das nur unter GNU verfügbare `stat -c`.
+
 ## [1.14.0] – 2026-09-11
 
 ### Hinzugefügt

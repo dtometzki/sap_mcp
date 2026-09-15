@@ -26,3 +26,7 @@ Claude outputs/
 vault.enc
 vault.enc.*.tmp
 server.lock
+
+# Workspace builds and distributable archives
+.cache/
+artifacts/

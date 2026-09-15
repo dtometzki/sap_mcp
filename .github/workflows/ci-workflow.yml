@@ -27,3 +27,15 @@ jobs:
       - run: npx playwright install --with-deps chromium
       # Local HTTP/browser fixtures only — no SAP session or SAP requests.
       - run: npm test
+      - run: npm run package
+      - run: npm run test:archives
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sap-notes-mcp
+          path: artifacts/sap-notes-mcp-*.tar.gz
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sap-notes-web
+          path: artifacts/sap-notes-web-*.tar.gz
+          if-no-files-found: error

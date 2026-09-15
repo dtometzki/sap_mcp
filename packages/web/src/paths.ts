@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { expandHomePath, intFromEnv } from "../config.js";
+import { expandHomePath, intFromEnv } from "@sap-notes/core";
 
 /**
  * Shared by the server (main.ts) and the background launcher (daemon.ts): both must

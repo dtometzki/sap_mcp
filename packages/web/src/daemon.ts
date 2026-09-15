@@ -1,7 +1,11 @@
+import {
+  applicationEnvDirectories,
+  isEntrypoint,
+  loadDotEnv,
+  scrubCredentialsFromEnv,
+} from "@sap-notes/core";
 import { spawn } from "node:child_process";
 import { mkdir, open, readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-import { loadDotEnv, scrubCredentialsFromEnv } from "../env.js";
 import { WebError } from "./vault.js";
 import { parseLockPid, processAlive, webDataDirectory, webLockPath, webLogPath, webPort } from "./paths.js";
 
@@ -40,7 +44,7 @@ async function responds(port: number): Promise<boolean> {
   }
 }
 
-export async function start(): Promise<void> {
+export async function start(envDirectories: readonly string[] = applicationEnvDirectories(import.meta.url)): Promise<void> {
   const port = webPort();
   const directory = webDataDirectory();
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -53,7 +57,9 @@ export async function start(): Promise<void> {
   const logPath = webLogPath(directory);
   // 0600: the log never carries credentials, but it names notes and search terms.
   const log = await open(logPath, "a", 0o600);
-  const child = spawn(process.execPath, [fileURLToPath(new URL("./main.js", import.meta.url))], {
+  // Carry the exact search order into the detached child (including legacy entrypoints).
+  const childCode = `import { run } from ${JSON.stringify(new URL("./main.js", import.meta.url).href)}; await run(${JSON.stringify(envDirectories)});`;
+  const child = spawn(process.execPath, ["--input-type=module", "--eval", childCode], {
     detached: true,
     stdio: ["ignore", log.fd, log.fd],
     env: process.env,
@@ -117,19 +123,23 @@ export async function status(): Promise<void> {
   );
 }
 
-async function main(): Promise<void> {
+async function main(envDirectories: readonly string[]): Promise<void> {
   // The same .env the server reads, so SAP_WEB_PORT/SAP_WEB_DATA_DIR resolve identically.
-  loadDotEnv();
+  loadDotEnv(envDirectories);
   // The server reads .env itself; the S-user credentials must not travel via our environment.
   scrubCredentialsFromEnv();
   const command = process.argv[2];
-  if (command === "start") return start();
+  if (command === "start") return start(envDirectories);
   if (command === "stop") return stop();
   if (command === "status") return status();
-  throw new WebError("USAGE", "Verwendung: node dist/web/daemon.js start|stop|status");
+  throw new WebError("USAGE", "Verwendung: node dist/daemon.js start|stop|status");
 }
 
-main().catch((error: unknown) => {
-  console.error(error instanceof WebError ? error.message : "Der Befehl konnte nicht ausgeführt werden.");
-  process.exitCode = 1;
-});
+export async function run(envDirectories: readonly string[] = applicationEnvDirectories(import.meta.url)): Promise<void> {
+  await main(envDirectories).catch((error: unknown) => {
+    console.error(error instanceof WebError ? error.message : "Der Befehl konnte nicht ausgeführt werden.");
+    process.exitCode = 1;
+  });
+}
+
+if (isEntrypoint(import.meta.url)) await run();

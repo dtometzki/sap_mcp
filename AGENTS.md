@@ -5,11 +5,13 @@
 Nach jeder funktionalen Änderung am Server-Code:
 
 1. **CHANGELOG.md** – Eintrag unter `[Unreleased]` (Hinzugefügt / Behoben / Geändert).
-2. **package.json** – Version nach SemVer bumpen und `[Unreleased]` im CHANGELOG
-   in einen datierten Abschnitt überführen.
+2. **package.json** – Version im Root und in allen drei Workspace-Paketen gemeinsam nach SemVer bumpen und `[Unreleased]` im CHANGELOG
+   in einen datierten Abschnitt überführen. Core-Abhängigkeiten und Lockdatei mitziehen.
 3. **README.md** – Prüfen, ob Tools, ENV-Variablen oder Setup-Schritte betroffen sind;
    nur bei nutzersichtbaren Änderungen aktualisieren.
 4. **Build + Lint + Tests** – `npm run build && npm run lint && npm test` muss grün sein.
+   Bei Änderungen an Paketstruktur, Build oder Installation zusätzlich
+   `npm run package && npm run test:archives` ausführen.
 
 ## GitHub-Workflow für Code-Änderungen
 
@@ -34,7 +36,8 @@ einen Pull Request nach `main` bereitgestellt:
 
 ## Cursor Cloud
 
-Beim Umgebungstart stellt `scripts/cloud-web-start.sh` den Tresor aus
+Beim Umgebungstart leitet `scripts/cloud-web-start.sh` an
+`packages/web/scripts/cloud-web-start.sh` weiter. Dieses stellt den Tresor aus
 `SAP_WEB_VAULT_B64_1` bis `_4` wieder her (Verzeichnis `0700`, Datei `0600`) und
 führt `npm run web:start` aus. Das passiert automatisch — den Benutzer nicht
 nach Vault-Teilen, Master-Passwort oder einem Start-Prompt fragen.

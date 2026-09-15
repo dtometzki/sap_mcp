@@ -1,0 +1,273 @@
+# SAP Notes MCP
+
+MCP-Server für die Suche in SAP Notes / KBAs im **geschützten** SAP-Support-Bereich.
+
+Da SAP keine offizielle Notes-API anbietet, arbeitet der Server mit einer
+authentifizierten Browser-Session (Playwright):
+
+1. **Einmalig** interaktiv einloggen (`npm run login`) — inkl. MFA, im sichtbaren Browser.
+2. Session (Cookies + localStorage) wird nach `~/.sap-notes-mcp/session.json` (mode 0600) gespeichert.
+3. Der MCP-Server läuft danach **headless** und nutzt diese Session.
+4. Läuft die Session ab und sind `SAPUSER`/`SAPPASSWORD` hinterlegt (in der Umgebung oder in einer `.env`), meldet
+   sich der Server **selbst** neu an und wiederholt den Tool-Aufruf (siehe
+   [Automatischer Login](#automatischer-login-sapuser--sappassword)). Ohne Credentials —
+   oder wenn SAP MFA verlangt — liefern die Tools eine klare Fehlermeldung → `npm run login`
+   erneut ausführen und die Anfrage einfach wiederholen; der Server liest die neue Session
+   ohne Neustart ein. Fehlt dem S-User dagegen nur die **Berechtigung** für eine bestimmte
+   Note (HTTP 403), wird das als solches gemeldet; ein erneuter Login ändert daran nichts.
+5. Nach längerer Inaktivität (Default 10 min) beendet der Server den headless Browser,
+   um RAM zu sparen; der nächste Tool-Aufruf startet ihn automatisch neu.
+
+## Installation aus dem Download-Archiv
+
+Das Archiv `sap-notes-mcp-<Version>.tar.gz` entpacken und in den enthaltenen Ordner wechseln.
+Voraussetzungen: Node.js ab 20, npm und Internetzugang für npm-Pakete und Chromium.
+Die passende Core-Bibliothek liegt im Archiv; eine Web-App wird nicht benötigt.
+
+```bash
+npm ci --omit=dev
+npm run browser:install
+npm run login          # sichtbarer Browser: S-User + MFA
+npm start              # stdio, wartet auf MCP-Client
+```
+
+Auf Linux ggf. die Chromium-Systembibliotheken mit
+`npx --no-install playwright install --with-deps chromium` installieren.
+
+Im Repository vom Root aus:
+
+```bash
+npm ci
+npm run build --workspace @sap-notes/mcp
+npm run login --workspace @sap-notes/mcp
+npm test --workspace @sap-notes/mcp
+```
+
+Der Paket-Build baut Core automatisch mit. Archiv-Installationen brauchen keinen
+TypeScript-Build. Die bisherigen Root-Befehle bleiben verfügbar.
+
+### ENV-Variablen laden
+
+Server, Login-CLI und Diagnose-Skripte lesen beim Start selbst eine `.env`-Datei ein — kein
+`--env-file`-Flag und kein `dotenv`-Dependency nötig:
+
+```bash
+cp .env.example .env   # Werte anpassen
+chmod 600 .env         # enthält ggf. das Passwort
+```
+
+Eine `.env` ist **optional** — alle Variablen können genauso aus der Prozessumgebung
+kommen (Shell-Export, `env`-Block in der MCP-Client-Config, systemd `Environment=`,
+Container-Secrets). Regeln:
+
+* **Echte Umgebungsvariablen haben Vorrang** vor Werten aus der Datei.
+* Das gilt auch über Alt-Namen hinweg: ein in der Shell exportiertes `SAP_USERNAME`
+  schlägt ein `SAPUSER`, das nur in der Datei steht. Stammen beide aus derselben
+  Quelle, gewinnt der bevorzugte Name (`SAPUSER` vor `SAP_USERNAME`).
+* Ohne `SAP_ENV_FILE` werden `<App-Verzeichnis>/.env`, im Workspace danach
+  `<Repo-Root>/.env` und zuletzt `$PWD/.env` probiert; die
+  erste existierende Datei gewinnt.
+* `SAP_ENV_FILE` ist **exklusiv**: gesetzt, wird ausschließlich dieser Pfad gelesen und
+  nicht still auf eine andere `.env` zurückgefallen (sonst würde man sich mit dem
+  falschen S-User anmelden). Ist die Datei nicht lesbar, kommt eine Warnung auf stderr
+  und es geht mit der Prozessumgebung weiter.
+* Ist die Datei für andere Benutzer lesbar, warnt der Server ebenfalls auf **stderr**.
+
+### Automatischer Login (`SAPUSER` / `SAPPASSWORD`)
+
+```dotenv
+SAPUSER=S0001234567
+SAPPASSWORD=…
+```
+
+oder, ganz ohne Datei:
+
+```bash
+export SAPUSER=S0001234567 SAPPASSWORD=…
+npm start
+```
+
+Damit gilt:
+
+* `npm run login` füllt das Logon-Formular automatisch aus. Das Browserfenster bleibt
+  sichtbar — MFA, Passwortwechsel o. ä. lassen sich von Hand abschließen.
+* Der **Server** meldet sich bei abgelaufener Session headless selbst an und wiederholt
+  den fehlgeschlagenen Tool-Aufruf **einmal**. Der Ablauf ist serialisiert: parallele
+  Tool-Aufrufe lösen nie mehrere gleichzeitige Logins aus.
+* Schlägt der Auto-Login fehl, wird er für `SAP_AUTO_LOGIN_COOLDOWN_MS` (Default 5 min)
+  nicht erneut versucht; bei MFA oder abgelehnten Credentials für die restliche Laufzeit
+  des Prozesses. So kann kein Retry-Loop den S-User sperren. Die Ursache steht auf stderr,
+  der Client bekommt die gewohnte Meldung mit dem Hinweis auf `npm run login`.
+* `SAP_AUTO_LOGIN=0` schaltet die Automatik ab, ohne die Credentials zu entfernen.
+
+Die automatische Eingabe von Benutzer und Passwort ist ausschließlich auf
+`https://accounts.sap.com`, `https://accounts.sap.cn` und deren Subdomains
+(z. B. `eu.accounts.sap.com`) erlaubt (Standardport 443). Portal- und Kampagnen-
+Hosts wie `me.sap.com` oder `campaign.sap.com` sind keine Login-Seiten. Verwendet
+die Anmeldung einen anderen Identity Provider, ist der interaktive Login ohne
+hinterlegtes Passwort erforderlich. Die Origin wird vor jeder Eingabe erneut geprüft.
+
+Fehlerausgaben enthalten nur explizite Anwendungsmeldungen oder feste Fehlerkategorien.
+Interne Playwright-Aufrufprotokolle und Login-Banner werden nicht ausgegeben, da sie
+Tokens, Cookies oder Passworteingaben enthalten können. Details zur Ablehnung einer
+Anmeldung lassen sich im interaktiven Browser ansehen.
+
+Sicherheitshinweise: Das Passwort steht im Klartext in der `.env` (bereits in
+`.gitignore`) — daher `chmod 600` und auf Multi-User-Hosts besser bei
+`npm run login` + gespeicherter Session bleiben. MFA lässt sich prinzipbedingt nicht
+automatisieren; ein MFA-pflichtiger S-User braucht weiterhin den interaktiven Login.
+
+Ohne `SAPPASSWORD` verhält sich alles exakt wie bisher (`SAPUSER` bzw. das ältere
+`SAP_USERNAME` dient dann nur dem Vorbefüllen des Benutzerfelds).
+
+## Einbindung in Claude Desktop / Claude Code
+
+`claude_desktop_config.json` bzw. `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "sap-notes": {
+      "command": "node",
+      "args": ["/absoluter/pfad/sap-notes-mcp/dist/server.js"]
+    }
+  }
+}
+```
+
+Keine Credentials in der Client-Konfiguration nötig: Der Server nutzt die gespeicherte Session
+und optional die für Auto-Login konfigurierten Zugangsdaten.
+Im Workspace kann der Client auf `packages/mcp/dist/server.js` zeigen; der bisherige
+Root-Pfad `dist/server.js` bleibt gültig und behält Root-`.env` vor `$PWD/.env` bei.
+
+## Tools
+
+| Tool | Parameter | Rückgabe |
+|---|---|---|
+| `sap_notes_search` | `query` (string), `limit` (1–25, default 10) | Note-Nummer, Titel, URL je Treffer |
+| `sap_note_get` | `number` (4–10 Ziffern) | Vollständiger Note-Inhalt als Markdown |
+| `sap_note_attachments` | `number` (4–10 Ziffern) | Datei-Anhänge der Note (Name, Größe; ohne Download-URL) |
+| `sap_note_attachment_get` | `number`, optional `fileName` | Lädt einen Anhang nach `SAP_ATTACHMENT_DIR` herunter; Text-Anhänge (.txt, .sql, .csv, …) zusätzlich inline |
+| `sap_session_status` | – | Ob die gespeicherte Session noch gültig ist |
+
+Hinweis zu Anhängen: Solange eine Note den Banner „A new version is in preparation“
+zeigt, blendet das Portal Anhänge portalweit aus (KBA 3453681) — die Liste ist dann
+leer, bis SAP die neue Version freigibt. `fileName` darf entfallen, wenn die Note genau
+einen Anhang hat; sonst genügt ein eindeutiger Teilstring (case-insensitive).
+Downloads sind auf 100 MB begrenzt; das Limit wird auch bei chunked Responses anhand
+der tatsächlich empfangenen Bytes durchgesetzt. Redirects werden nur zu HTTPS-Hosts
+unter `sap.com` verfolgt. Die Liste enthält absichtlich keine Download-URLs (die
+können signierte Token tragen). Dateien landen in einem Note-Unterordner mit
+Rechten `0700`, die Datei selbst mit `0600`. `SAP_API_TIMEOUT_MS` begrenzt beim Download
+die Wartezeit zwischen zwei Datenblöcken, nicht die Gesamtdauer — große Anhänge auf
+langsamen Leitungen laufen durch, ein hängender Transfer bricht trotzdem ab.
+
+Hinweis zu Proxys: Coveo-Token/-Suche und die Note-Detail-API laufen über den
+HTTP-Client des Playwright-Browsers, der Anhang-Download über Nodes eingebautes `fetch`
+(undici). Hinter einem Corporate-Proxy kann daher das eine funktionieren und das andere
+nicht: Für den Browser gilt die Proxy-Konfiguration des Systems bzw. Playwrights, `fetch`
+beachtet `HTTPS_PROXY` nur, wenn Node mit `NODE_USE_ENV_PROXY=1` (Node ≥ 24) gestartet
+wird. Bei einem hängenden Download also zuerst prüfen, ob der Proxy für `fetch` gesetzt ist.
+
+Die drei direkten API-Aufrufe folgen keinen HTTP-Weiterleitungen. Ein Redirect zu
+einem freigegebenen Login-Origin wird als abgelaufene Session behandelt; andere
+Redirects führen zu einem Fehler beziehungsweise dem bestehenden DOM-Fallback.
+Bei dauerhaft geänderten API-Adressen muss die konfigurierte URL direkt auf den
+neuen Endpunkt zeigen. Für Anhang-Downloads bleibt die Prüfung jedes Redirect-Ziels
+vor dem nächsten HTTP-Aufruf bestehen.
+
+Schlägt die Coveo-Suche bzw. die Note-Detail-API fehl und liefert auch der DOM-Fallback
+nichts, melden `sap_notes_search` und `sap_note_attachments` den ursprünglichen Fehler
+statt „keine Treffer“ / „keine Anhänge“ — eine leere Antwort ist damit immer eine echte
+Antwort des Portals.
+
+## Konfiguration (ENV, alles optional)
+
+| Variable | Default | Zweck |
+|---|---|---|
+| `SAP_STATE_PATH` | `~/.sap-notes-mcp/session.json` | Ablage der Session (`~` wird expandiert) |
+| `SAP_SEARCH_URL` | `https://me.sap.com/search?q={query}&tab=notes` | Such-URL (`{query}`) |
+| `SAP_COVEO_ORG` | `sapamericaproductiontyfzmfz0` | Coveo-Organisation |
+| `SAP_COVEO_TOKEN_URL` | SAP-for-Me-Token-Endpunkt | Endpunkt für kurzlebige Such-Token |
+| `SAP_COVEO_SEARCH_URL` | Coveo REST Search v2 | Such-Endpunkt inkl. Organisation |
+| `SAP_COVEO_SEARCH_HUB` | `SAP for Me` | Coveo Search Hub / Pipeline-Kontext |
+| `SAP_NOTE_URL` | `https://me.sap.com/notes/{id}` | Detail-URL (`{id}`) |
+| `SAP_NOTE_API_URL` | `https://me.sap.com/backend/raw/sapnotes/Detail?q={id}&t=E&isVTEnabled=false` | JSON-API hinter der Note-Seite; Quelle der Anhangsliste (`{id}`) |
+| `SAP_ATTACHMENT_DIR` | `~/Downloads/sap-notes` | Zielordner für Anhänge (ein Unterordner je Note-Nummer mit `0700`, `~` wird expandiert) |
+| `SAP_ATTACHMENT_COOKIE_HOSTS` | – | Zusätzliche Hosts, die beim Anhang-Download Session-Cookies erhalten dürfen (kommagetrennt; Default: `me.sap.com`, `*.support.sap.com`, `accounts.sap.com`) |
+| `SAP_PROBE_URL` | `https://me.sap.com/notes/2170696` | Seite zur Session-Prüfung; muss `https://*.sap.com` oder `https://*.sap.cn` sein. Die Prüfung fragt zuerst `SAP_NOTE_API_URL` für dieselbe Note-Nummer ab und rendert die Seite nur bei mehrdeutiger Antwort |
+| `SAP_NAV_TIMEOUT_MS` | `60000` | Navigations-Timeout |
+| `SAP_API_TIMEOUT_MS` | `60000` | Timeout für direkte HTTP-API-Aufrufe (Coveo-Token/-Suche, Note-Detail-API); beim Anhang-Download maximale Wartezeit zwischen zwei Datenblöcken |
+| `SAP_NETWORK_IDLE_TIMEOUT_MS` | `0` | Optionale Wartezeit auf Netzwerk-Ruhe nach dem Öffnen einer Portal-Seite; 0 überspringt sie (Default). Das Portal hält Verbindungen offen, der Timeout greift fast immer — Note-Inhalt und DOM-Fallbacks warten stattdessen auf den gerenderten Inhalt |
+| `SAP_RENDER_SETTLE_MS` | `2500` | Wartezeit für spätes SPA-Rendering |
+| `SAP_IDLE_TIMEOUT_MS` | `600000` | Browser nach Inaktivität schließen (0 = deaktiviert) |
+| `SAPUSER` | – | S-User für Login-CLI und automatischen Login (Alt-Name: `SAP_USERNAME`) |
+| `SAPPASSWORD` | – | Passwort für den automatischen Login (Alt-Name: `SAP_PASSWORD`); nur zusammen mit `SAPUSER` wirksam |
+| `SAP_AUTO_LOGIN` | `1` | Automatischen Re-Login des Servers abschalten (`0`), ohne Credentials zu entfernen |
+| `SAP_AUTO_LOGIN_COOLDOWN_MS` | `300000` | Sperrzeit nach fehlgeschlagenem Auto-Login |
+| `SAP_LOGIN_STEP_TIMEOUT_MS` | `30000` | Timeout je Login-Schritt |
+| `SAP_ENV_FILE` | – | Alternativer Pfad zur `.env`; exklusiv — kein Rückfall auf eine andere Datei |
+| `SAP_LOGIN_USER_SELECTOR` | `input#j_username, …` | Selektor des Benutzerfelds im Logon-Formular |
+| `SAP_LOGIN_PASSWORD_SELECTOR` | `input#j_password, …` | Selektor des Passwortfelds |
+| `SAP_LOGIN_SUBMIT_SELECTOR` | `#logOnFormSubmit, …` | Selektor des Submit-Buttons |
+| `SAP_LOGIN_MFA_SELECTOR` | `input[autocomplete='one-time-code'], …` | Erkennung der MFA-Abfrage (bricht den Auto-Login ab) |
+
+Alle Millisekunden-Werte müssen im von Node unterstützten Timer-Bereich von `0` bzw. `1`
+bis `2147483647` liegen; `0` ist nur bei den ausdrücklich abschaltbaren Optionen erlaubt.
+
+## Wenn SAP das Portal umbaut
+
+Der Server benutzt bewusst **keine** hartkodierten CSS-Klassen:
+
+* Suche = alle Links, deren `href` auf eine Note-Nummer zeigt (`/notes/<n>`, `/knowledge/en/<n>`, …).
+* Detail = auf fachliche Note-Abschnitte (z. B. „Symptom“ / „Solution“) warten und
+  deren Inhalt ohne Portal-Navigation, Werkzeugleisten oder Sprachauswahl übernehmen.
+  Explizite Artikel ohne diese Abschnittsnamen benötigen einen passenden Note-Titel;
+  eine reine Portal-Oberfläche wird nicht als Note akzeptiert. Tabellen und
+  Referenzlinks bleiben in Markdown erhalten, Bilder werden ausgelassen.
+* Anhänge = Note-Detail-JSON-API zuerst; schlägt sie fehl, werden Anhang-Links
+  (`…attachment…`, `/documents/…`) aus der gerenderten Note-Seite gelesen.
+  Heruntergeladen wird ausschliesslich per HTTPS von `*.sap.com`-Hosts.
+
+Ändert SAP die Routen, genügt in der Regel ein Anpassen von `SAP_SEARCH_URL` / `SAP_NOTE_URL`
+(URL im Browser kopieren, Suchbegriff durch `{query}`, Nummer durch `{id}` ersetzen).
+Portal- und Login-URLs müssen HTTPS auf `*.sap.com` / `*.sap.cn` bleiben (die
+Coveo-Suche zusätzlich `*.coveo.com`). Andere Werte — `http:`, `file:`, fremde
+Hosts — lehnt der Server beim Start ab. Für die automatische Eingabe von Zugangsdaten
+gilt die engere Host-Liste `accounts.sap.com` / `accounts.sap.cn` inklusive Subdomains
+(Port 443).
+
+## Grenzen
+
+* Nur für die **eigene** Nutzung mit dem **eigenen** S-User gedacht. Ein zentral gehosteter
+  Server mit Technik-S-User verteilt faktisch lizenzierte Portalinhalte weiter — das ist
+  vorab mit den SAP-Nutzungsbedingungen abzugleichen.
+* Kein Bulk-Crawling: Tool-Aufrufe werden pro Serverprozess serialisiert. Die Suche liest
+  höchstens drei Coveo-Ergebnisseiten, bis das angeforderte Trefferlimit erreicht ist.
+* Korrekturanweisungen (ABAP) werden nicht ausgelesen; dafür wäre ein zusätzlicher
+  OData-Call gegen den Note-Assistant-Service nötig.
+
+## Entwicklung und Diagnose
+
+Die Prüfungen laufen im Repository vom Root aus. Die folgenden `node`-Befehle
+laufen im MCP-Paket oder im entpackten Archiv:
+
+```bash
+npm run typecheck --workspace @sap-notes/mcp
+npm run lint --workspace @sap-notes/mcp
+npm test --workspace @sap-notes/mcp
+node dist/test-search.js "HANA Revision"       # benötigt eine gültige Session
+node dist/diagnose-search.js "HANA Revision"   # interaktiv
+```
+
+Das Diagnose-Skript entfernt Zugangstoken und Cookie-Header vor dem Schreiben und legt
+`diagnose-coveo.json` mit Dateimodus `0600` ab. Es behält höchstens 200 XHR-Antworten,
+512.000 Zeichen pro Antwort und insgesamt 5.000.000 Antwortzeichen im Speicher. Der
+Mitschnitt kann dennoch geschützte SAP-Suchergebnisse enthalten und sollte nicht
+weitergegeben oder committed werden.
+
+Lint (typescript-eslint, type-aware) und die Tests laufen zusätzlich in der CI
+(`.github/workflows/ci-workflow.yml`) bei jedem Push/PR. Die HTTP- und Browser-Fixtures
+benötigen keine SAP-Session und senden keine Anfragen an SAP. CI installiert Chromium
+und verlangt erfolgreiche Browser-Tests. Lokal werden Browser-Tests übersprungen,
+wenn Chromium fehlt oder nicht gestartet werden darf; die übrigen Tests laufen weiter.

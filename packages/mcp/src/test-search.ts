@@ -1,17 +1,22 @@
-import { safeErrorMessage } from "./errors.js";
-import { loadConfig } from "./config.js";
-import { loadDotEnv, scrubCredentialsFromEnv } from "./env.js";
-import { SapSession } from "./session.js";
-import { searchNotes } from "./notes.js";
+import {
+  applicationEnvDirectories,
+  isEntrypoint,
+  safeErrorMessage,
+  loadConfig,
+  loadDotEnv,
+  scrubCredentialsFromEnv,
+  SapSession,
+  searchNotes,
+} from "@sap-notes/core";
 
 /**
  * End-to-end smoke test for the new Coveo-backed search, using your stored session.
  *   npm run build
  *   node dist/test-search.js "HANA Revision"
  */
-async function main(): Promise<void> {
+async function main(envDirectories: readonly string[]): Promise<void> {
   const query = process.argv.slice(2).join(" ").trim() || "HANA Revision";
-  loadDotEnv();
+  loadDotEnv(envDirectories);
   const config = loadConfig();
   scrubCredentialsFromEnv(); // diagnostics never log in; keep credentials away from Chromium
   const session = new SapSession(config, true); // headless, uses session.json
@@ -26,7 +31,11 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error: unknown) => {
-  console.error("Test failed:", safeErrorMessage(error));
-  process.exitCode = 1;
-});
+export async function run(envDirectories: readonly string[] = applicationEnvDirectories(import.meta.url)): Promise<void> {
+  await main(envDirectories).catch((error: unknown) => {
+    console.error("Test failed:", safeErrorMessage(error));
+    process.exitCode = 1;
+  });
+}
+
+if (isEntrypoint(import.meta.url)) await run();

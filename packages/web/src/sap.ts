@@ -1,11 +1,26 @@
+import {
+  type Config,
+  AutoLoginError,
+  MfaRequiredError,
+  fillLoginForm,
+  performAutoLogin,
+  type Credentials,
+  SapSession,
+  SessionExpiredError,
+  type SessionStore,
+  fetchNote,
+  searchNotes,
+  resetTokenCache,
+  type NoteDetail,
+  type NoteHit,
+  ToolRunner,
+  fetchAttachmentList,
+  openAttachmentStream,
+  type AttachmentStream,
+  type NoteAttachment,
+  assertAllowedPageUrl,
+} from "@sap-notes/core";
 import { randomUUID } from "node:crypto";
-import type { Config } from "../config.js";
-import { AutoLoginError, MfaRequiredError, fillLoginForm, performAutoLogin, type Credentials } from "../autoLogin.js";
-import { SapSession, SessionExpiredError, type SessionStore } from "../session.js";
-import { fetchNote, searchNotes, resetTokenCache, type NoteDetail, type NoteHit } from "../notes.js";
-import { ToolRunner } from "../toolRunner.js";
-import { fetchAttachmentList, openAttachmentStream, type AttachmentStream, type NoteAttachment } from "../attachments.js";
-import { assertAllowedPageUrl } from "../urls.js";
 import { Vault, WebError, locked } from "./vault.js";
 
 export type SapStatus = "unknown" | "authenticated" | "login_required" | "mfa_required" | "login_failed" | "interactive";
