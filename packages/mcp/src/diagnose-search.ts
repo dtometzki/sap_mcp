@@ -1,11 +1,16 @@
-import { safeErrorMessage } from "./errors.js";
+import {
+  applicationEnvDirectories,
+  isEntrypoint,
+  safeErrorMessage,
+  loadConfig,
+  loadDotEnv,
+  scrubCredentialsFromEnv,
+  redactUrlForLog,
+  SapSession,
+} from "@sap-notes/core";
 import { chmod, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
-import { loadConfig } from "./config.js";
-import { loadDotEnv, scrubCredentialsFromEnv } from "./env.js";
-import { redactUrlForLog } from "./urls.js";
-import { SapSession } from "./session.js";
 
 /**
  * Diagnostic v4: capture the full Coveo search call.
@@ -57,9 +62,9 @@ function redactSecret(value: string, secret: string): string {
   return secret ? value.replaceAll(secret, "[REDACTED]") : value;
 }
 
-async function main(): Promise<void> {
+async function main(envDirectories: readonly string[]): Promise<void> {
   const query = process.argv.slice(2).join(" ").trim() || "HANA Revision";
-  loadDotEnv();
+  loadDotEnv(envDirectories);
   const config = loadConfig();
   scrubCredentialsFromEnv(); // diagnostics never log in; keep credentials away from Chromium
   const session = new SapSession(config, false);
@@ -193,7 +198,11 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error: unknown) => {
-  console.error("Diagnostic failed:", safeErrorMessage(error));
-  process.exitCode = 1;
-});
+export async function run(envDirectories: readonly string[] = applicationEnvDirectories(import.meta.url)): Promise<void> {
+  await main(envDirectories).catch((error: unknown) => {
+    console.error("Diagnostic failed:", safeErrorMessage(error));
+    process.exitCode = 1;
+  });
+}
+
+if (isEntrypoint(import.meta.url)) await run();

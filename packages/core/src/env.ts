@@ -1,6 +1,5 @@
 import { lstatSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 /**
  * Minimal .env support without a runtime dependency.
@@ -120,24 +119,11 @@ export function parseDotEnv(content: string): Record<string, string> {
   return result;
 }
 
-/** Package root (…/sap), resolved from dist/env.js at runtime and src/env.ts under ts-node. */
-function packageRoot(): string {
-  return fileURLToPath(new URL("..", import.meta.url));
-}
-
-/**
- * Candidate locations, first existing file wins: <package root>/.env > <cwd>/.env.
- * The package root comes first because the MCP client usually starts the server with
- * an unrelated cwd.
- *
- * SAP_ENV_FILE is EXCLUSIVE: whoever names a credentials file means that file, and
- * silently falling back to a different one would log in with the wrong S-user — the
- * fastest way to get an account locked.
- */
-export function envFileCandidates(): string[] {
+/** The caller owns search locations; the library never loads a core-package .env. */
+export function envFileCandidates(directories: readonly string[] = [process.cwd()]): string[] {
   const explicit = process.env.SAP_ENV_FILE?.trim();
   if (explicit) return [explicit];
-  return [join(packageRoot(), ".env"), join(process.cwd(), ".env")];
+  return [...new Set(directories.map(directory => join(directory, ".env")))];
 }
 
 /**
@@ -181,8 +167,8 @@ function warnOnLoosePermissions(path: string): void {
  * Loads the first .env found into process.env and returns its path, or undefined
  * when no file exists. Must be called before loadConfig().
  */
-export function loadDotEnv(): string | undefined {
-  const candidates = envFileCandidates();
+export function loadDotEnv(directories: readonly string[] = [process.cwd()]): string | undefined {
+  const candidates = envFileCandidates(directories);
   for (const path of candidates) {
     const kind = inspectEnvFile(path);
     if (kind === "missing") continue;

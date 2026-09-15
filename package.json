@@ -1,33 +1,28 @@
 {
   "name": "sap-notes-mcp",
-  "version": "1.14.0",
+  "version": "1.15.0",
   "private": true,
-  "description": "MCP server for searching and fetching SAP Notes / KBAs from the protected SAP support area",
+  "description": "SAP Notes MCP and web applications with a shared library",
   "type": "module",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit",
-    "lint": "eslint src",
-    "test": "npm run build && node --test dist/*.test.js",
+    "build": "tsc -b && node scripts/build-compat.mjs",
+    "typecheck": "npm run build && npm run typecheck --workspaces",
+    "lint": "eslint packages/*/src && eslint --no-config-lookup --rule no-unused-vars:error --rule valid-typeof:error scripts/*.mjs tests/*.mjs",
+    "test": "npm run build && node --test packages/*/dist/*.test.js tests/*.test.mjs",
     "login": "npm run build && node dist/login.js",
     "start": "node dist/server.js",
-    "dev": "tsc --watch",
+    "dev": "npm run build && tsc -b --watch",
     "web": "npm run build && node dist/web/main.js",
     "web:start": "npm run build && node dist/web/daemon.js start",
     "web:stop": "node dist/web/daemon.js stop",
     "web:status": "node dist/web/daemon.js status",
     "web:restore-vault": "bash scripts/restore-web-vault.sh",
-    "web:cloud-start": "bash scripts/cloud-web-start.sh"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.0",
-    "markdown-it": "^15.0.1",
-    "playwright": "^1.49.0",
-    "turndown": "^7.2.0",
-    "zod": "^3.23.8"
+    "web:cloud-start": "bash scripts/cloud-web-start.sh",
+    "package": "npm run build && node scripts/package-apps.mjs",
+    "test:archives": "node --test tests/archives.integration.mjs"
   },
   "devDependencies": {
     "@types/markdown-it": "^14.2.0",
@@ -36,5 +31,8 @@
     "eslint": "^10.7.0",
     "typescript": "^5.6.0",
     "typescript-eslint": "^8.64.0"
-  }
+  },
+  "workspaces": [
+    "packages/*"
+  ]
 }

@@ -1,0 +1,33 @@
+{
+  "version": "1.15.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "name": "@sap-notes/core",
+  "description": "Shared SAP Notes access library",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "npm run build && node --test dist/*.test.js"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0",
+    "turndown": "^7.2.0",
+    "zod": "^3.23.8"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/*.js",
+    "dist/*.d.ts",
+    "!dist/*.test.*",
+    "README.md"
+  ]
+}

@@ -2,7 +2,7 @@
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist/", "node_modules/", "eslint.config.js"] },
+  { ignores: ["**/dist/**", "**/node_modules/**", "eslint.config.js"] },
   ...tseslint.configs.recommendedTypeChecked,
   {
     languageOptions: {
@@ -19,7 +19,7 @@ export default tseslint.config(
   {
     // node:test's test() returns a promise the runner itself awaits; test stubs
     // are often async without awaiting (fakes, thrown errors).
-    files: ["src/**/*.test.ts"],
+    files: ["packages/*/src/**/*.test.ts"],
     rules: {
       "@typescript-eslint/no-floating-promises": "off",
       "@typescript-eslint/require-await": "off",

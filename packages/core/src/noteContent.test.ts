@@ -3,7 +3,6 @@ import test from "node:test";
 import { chromium, type Browser, type Page } from "playwright";
 import { extractNoteDocument, noteHtmlToMarkdown } from "./noteContent.js";
 import { fetchNote } from "./notes.js";
-import { renderNote } from "./web/markdown.js";
 import { loadConfig } from "./config.js";
 import type { SapSession } from "./session.js";
 
@@ -21,7 +20,7 @@ async function launch(t: { skip(message: string): void }): Promise<Browser | und
   catch (error) { if (process.env.CI) throw error; t.skip("Chromium cannot start in this environment"); return undefined; }
 }
 
-test("note extraction excludes the portal shell, keeps all document sections and renders tables", async t => {
+test("note extraction excludes the portal shell, keeps all document sections and keeps Markdown tables", async t => {
   const browser = await launch(t); if (!browser) return;
   const page = await browser.newPage();
   try {
@@ -34,8 +33,7 @@ test("note extraction excludes the portal shell, keeps all document sections and
     const markdown = noteHtmlToMarkdown(html);
     for (const unwanted of ["SAP for Me", "SearchCancel", "Dashboard", "Menu", "Logo", "data:image", "Download for SNOTE", "Show Changes", "Available Languages", "Hidden portal state", "Example document", "Legal Feedback"]) assert.ok(!markdown.includes(unwanted), unwanted);
     for (const wanted of ["### Symptom", "### Reason and Prerequisites", "### Solution", "This document refers to", "Reference details", "1.  Check", "example\\_setting", "https://me.sap.com/notes/2170696"]) assert.ok(markdown.includes(wanted), wanted);
-    const rendered = renderNote(markdown);
-    assert.match(rendered, /example_setting/); assert.match(rendered, /<table>/); assert.match(rendered, /<th>Parameter<\/th>/); assert.match(rendered, /<code>enabled<\/code>/);
+    assert.match(markdown, /\| Parameter \| Value \|/); assert.match(markdown, /`enabled`/);
   } finally { await browser.close(); }
 });
 
@@ -72,12 +70,4 @@ test("documents without standard headings require an explicit article with the r
     assert.ok(await page.evaluate(extractNoteDocument, "3250501"));
     assert.equal(await page.evaluate(extractNoteDocument, "9999999"), null);
   } finally { await browser.close(); }
-});
-
-test("table conversion preserves data without headers and escapes pipes without emitting raw HTML", () => {
-  const markdown = noteHtmlToMarkdown(`<table><tr><td>name | alternative</td><td><p>first</p><p>second</p></td></tr><tr><td colspan="2">combined</td></tr></table><img src="data:image/svg+xml,anything" alt="Logo">`);
-  const html = renderNote(markdown);
-  assert.match(html, /<table>/); assert.match(html, /name \| alternative/); assert.match(html, /first second/); assert.match(html, /combined/);
-  assert.doesNotMatch(markdown, /<table|data:image|Logo/);
-  assert.doesNotThrow(() => noteHtmlToMarkdown("<table></table>"));
 });

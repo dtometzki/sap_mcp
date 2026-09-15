@@ -1,16 +1,22 @@
-import { PublicError, safeErrorMessage } from "./errors.js";
-import { createInterface } from "node:readline/promises";
-import { stdin, stdout } from "node:process";
-import { loadConfig } from "./config.js";
-import { SapSession } from "./session.js";
-import { envKeysFromFile, loadDotEnv, scrubCredentialsFromEnv } from "./env.js";
 import {
+  applicationEnvDirectories,
+  isEntrypoint,
+  PublicError,
+  safeErrorMessage,
+  loadConfig,
+  SapSession,
+  envKeysFromFile,
+  loadDotEnv,
+  scrubCredentialsFromEnv,
   credentialsFromConfig,
   fillLoginForm,
   waitForLoginResult,
   MfaRequiredError,
-} from "./autoLogin.js";
-import { isAllowedPageUrl, isAllowedLoginUrl } from "./urls.js";
+  isAllowedPageUrl,
+  isAllowedLoginUrl,
+} from "@sap-notes/core";
+import { createInterface } from "node:readline/promises";
+import { stdin, stdout } from "node:process";
 
 /**
  * Interactive login. Run once per machine (and again whenever the session expires).
@@ -20,8 +26,8 @@ import { isAllowedPageUrl, isAllowedLoginUrl } from "./urls.js";
  * completed by hand. Without credentials it behaves exactly as before: type everything
  * into the browser yourself.
  */
-async function main(): Promise<void> {
-  const envFile = loadDotEnv();
+async function main(envDirectories: readonly string[]): Promise<void> {
+  const envFile = loadDotEnv(envDirectories);
   const config = loadConfig();
   const credentials = credentialsFromConfig(config);
   // Name the actual source, so a stale .env is not blamed for a shell export (or vice versa).
@@ -91,7 +97,11 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error: unknown) => {
-  console.error("Login failed:", safeErrorMessage(error));
-  process.exitCode = 1;
-});
+export async function run(envDirectories: readonly string[] = applicationEnvDirectories(import.meta.url)): Promise<void> {
+  await main(envDirectories).catch((error: unknown) => {
+    console.error("Login failed:", safeErrorMessage(error));
+    process.exitCode = 1;
+  });
+}
+
+if (isEntrypoint(import.meta.url)) await run();

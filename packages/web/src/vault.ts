@@ -1,9 +1,12 @@
+import {
+  type Credentials,
+  isUsableStorageState,
+  type SessionState,
+} from "@sap-notes/core";
 import { createCipheriv, createDecipheriv, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { chmod, mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
-import type { Credentials } from "../autoLogin.js";
-import { isUsableStorageState, type SessionState } from "../session.js";
 import { favoriteSchema, MAX_FAVORITES, type Favorite } from "./favorites.js";
 
 export class WebError extends Error {

@@ -1,3 +1,12 @@
+import {
+  SapSession,
+  AccessDeniedError,
+  SessionExpiredError,
+  type SessionState,
+  type SessionStore,
+  loadConfig,
+  type NoteHit,
+} from "@sap-notes/core";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { chmod, mkdir, mkdtemp, readFile, writeFile, rm, stat, readdir } from "node:fs/promises";
@@ -6,15 +15,12 @@ import { join } from "node:path";
 import { request as httpRequest } from "node:http";
 import { chromium, type Browser } from "playwright";
 import { randomUUID } from "node:crypto";
-import { MAX_HISTORY, Vault, WebError } from "./web/vault.js";
-import { WebService, type SapGateway, type SapStatus } from "./web/sap.js";
-import { createWebServer, describeListenError, type WebServerOptions } from "./web/http.js";
-import { renderNote } from "./web/markdown.js";
-import { loadAppInfo, type AppInfo } from "./web/about.js";
-import { SapSession, AccessDeniedError, SessionExpiredError, type SessionState, type SessionStore } from "./session.js";
-import { loadConfig } from "./config.js";
-import type { NoteHit } from "./notes.js";
-import { MAX_FAVORITES, type Favorite } from "./web/favorites.js";
+import { MAX_HISTORY, Vault, WebError } from "./vault.js";
+import { WebService, type SapGateway, type SapStatus } from "./sap.js";
+import { createWebServer, describeListenError, type WebServerOptions } from "./http.js";
+import { renderNote } from "./markdown.js";
+import { loadAppInfo, type AppInfo } from "./about.js";
+import { MAX_FAVORITES, type Favorite } from "./favorites.js";
 
 const PASSWORD = "master test password 123";
 const SECOND = "a different master password";
@@ -449,7 +455,7 @@ test("web:start detaches a healthy server, is idempotent, and web:stop ends it a
   const run = promisify(execFile);
   const temp = await temporary();
   const port = await new Promise<number>((resolve, reject) => { const probe = createServer(); probe.once("error", reject); probe.listen(0, "127.0.0.1", () => { const address = probe.address(); probe.close(() => resolve(typeof address === "object" && address ? address.port : 0)); }); });
-  const daemon = new URL("./web/daemon.js", import.meta.url).pathname;
+  const daemon = new URL("./daemon.js", import.meta.url).pathname;
   const env = { ...process.env, SAP_WEB_DATA_DIR: temp.directory, SAP_WEB_PORT: String(port), SAP_ENV_FILE: join(temp.directory, "no.env") };
   try {
     const started = await run(process.execPath, [daemon, "start"], { env });

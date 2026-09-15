@@ -1,3 +1,8 @@
+import {
+  AccessDeniedError,
+  SessionExpiredError,
+  sanitizeFileName,
+} from "@sap-notes/core";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -17,12 +22,10 @@ async function* readableStreamChunks(body: ReadableStream<Uint8Array>): AsyncGen
   }
 }
 import { z } from "zod";
-import { AccessDeniedError, SessionExpiredError } from "../session.js";
 import { credentialsSchema, masterSchema, WebError, locked } from "./vault.js";
 import { type WebService } from "./sap.js";
 import { renderNote } from "./markdown.js";
 import { loadAppInfo } from "./about.js";
-import { sanitizeFileName } from "../attachments.js";
 import { favoriteInputSchema, favoriteNumberSchema, filterFavorites, MAX_FAVORITES } from "./favorites.js";
 
 const searchSchema = z.object({ query: z.string().trim().min(2).max(500), limit: z.number().int().min(1).max(25).default(10) }).strict();
@@ -114,8 +117,8 @@ export function createWebServer(service: WebService, options: WebServerOptions =
     idleTimer.unref();
   }
   const assets = new Map([
-    ["/", { url: new URL("../../web/index.html", import.meta.url), type: "text/html; charset=utf-8" }],
-    ["/app.css", { url: new URL("../../web/app.css", import.meta.url), type: "text/css; charset=utf-8" }],
+    ["/", { url: new URL("../public/index.html", import.meta.url), type: "text/html; charset=utf-8" }],
+    ["/app.css", { url: new URL("../public/app.css", import.meta.url), type: "text/css; charset=utf-8" }],
     ["/app.js", { url: new URL("./client.js", import.meta.url), type: "text/javascript; charset=utf-8" }],
   ]);
   const server = createServer((request, response) => {

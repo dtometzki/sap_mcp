@@ -1,8 +1,11 @@
-import type { NoteHit, NoteDetail } from "../notes.js";
+import {
+  type NoteHit,
+  type NoteDetail,
+  type NoteAttachment,
+} from "@sap-notes/core";
 import type { HistoryEntry } from "./vault.js";
 import type { SapStatus } from "./sap.js";
 import type { AppInfo } from "./about.js";
-import type { NoteAttachment } from "../attachments.js";
 import type { Favorite } from "./favorites.js";
 
 function el<T extends HTMLElement = HTMLElement>(id: string): T {

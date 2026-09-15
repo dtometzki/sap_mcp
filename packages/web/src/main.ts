@@ -1,15 +1,21 @@
+import {
+  applicationEnvDirectories,
+  isEntrypoint,
+  loadConfig,
+  intFromEnv,
+  loadDotEnv,
+  scrubCredentialsFromEnv,
+  safeErrorMessage,
+} from "@sap-notes/core";
 import { join } from "node:path";
 import { mkdir, open, readFile, rm } from "node:fs/promises";
-import { loadConfig, intFromEnv } from "../config.js";
-import { loadDotEnv, scrubCredentialsFromEnv } from "../env.js";
-import { safeErrorMessage } from "../errors.js";
 import { Vault, WebError } from "./vault.js";
 import { BrowserSapGateway, WebService } from "./sap.js";
 import { createWebServer, describeListenError } from "./http.js";
 import { parseLockPid, webDataDirectory, webLockPath, webPort } from "./paths.js";
 
-async function main(): Promise<void> {
-  loadDotEnv();
+async function main(envDirectories: readonly string[]): Promise<void> {
+  loadDotEnv(envDirectories);
   // Explicitly exclude legacy credentials from web configuration and browser environment.
   scrubCredentialsFromEnv();
   const config = { ...loadConfig(), username: undefined, password: undefined, autoLoginEnabled: true };
@@ -57,7 +63,11 @@ async function main(): Promise<void> {
     console.log(`SAP Notes: http://127.0.0.1:${port}`);
   } catch (error) { await shutdown(); throw describeListenError(error, port); }
 }
-main().catch((error: unknown) => {
-  console.error(error instanceof WebError ? error.message : safeErrorMessage(error));
-  process.exitCode = 1;
-});
+export async function run(envDirectories: readonly string[] = applicationEnvDirectories(import.meta.url)): Promise<void> {
+  await main(envDirectories).catch((error: unknown) => {
+    console.error(error instanceof WebError ? error.message : safeErrorMessage(error));
+    process.exitCode = 1;
+  });
+}
+
+if (isEntrypoint(import.meta.url)) await run();
