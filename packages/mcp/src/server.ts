@@ -7,14 +7,19 @@ import {
   SapSession,
   credentialsFromConfig,
   performAutoLogin,
+  AccessDeniedError,
   fetchNote,
   resetTokenCache,
   searchNotes,
   wrapUntrustedPortalContent,
-  downloadAttachment,
   fetchAttachmentList,
   formatAttachmentDownload,
   formatAttachmentList,
+  openAttachmentStream,
+  persistAttachmentStream,
+  resetAttachmentListCache,
+  safeErrorMessage,
+  SessionExpiredError,
   ToolRunner,
 } from "@sap-notes/core";
 import { createRequire } from "node:module";
@@ -44,10 +49,15 @@ export async function run(envDirectories: readonly string[] = applicationEnvDire
    * credentials are configured, which keeps the previous behaviour (report the expiry and
    * let the user run `npm run login`) completely unchanged.
    */
+  const resetCaches = (): void => {
+    resetTokenCache();
+    resetAttachmentListCache();
+  };
+
   const reauthenticate = credentials
     ? async (): Promise<void> => {
         process.stderr.write("[sap-notes] session expired — attempting automatic login...\n");
-        await performAutoLogin(config, credentials, true);
+        await performAutoLogin(config, credentials, true, undefined, undefined, session);
         process.stderr.write("[sap-notes] automatic login succeeded.\n");
       }
     : undefined;
@@ -68,7 +78,8 @@ export async function run(envDirectories: readonly string[] = applicationEnvDire
       ensureSession,
       saveState: () => session.saveState(),
       close: () => session.close(),
-      resetTokenCache,
+      closeIdle: () => session.closeBrowser(),
+      resetTokenCache: resetCaches,
       reauthenticate,
     },
     {
@@ -127,11 +138,18 @@ export async function run(envDirectories: readonly string[] = applicationEnvDire
     async ({ number }) =>
       runner.execute(
         () => fetchNote(session, config, number),
-        (note) =>
-          wrapUntrustedPortalContent(
+        (note) => {
+          const limit = 80_000;
+          const truncated = note.markdown.length > limit;
+          const body = truncated ? note.markdown.slice(0, limit) : note.markdown;
+          const suffix = truncated
+            ? `\n\n[Output truncated — the complete note is at ${note.url}]`
+            : "";
+          return wrapUntrustedPortalContent(
             `SAP Note ${note.id}`,
-            `# ${note.id} — ${note.title}\n\nSource: ${note.url}\n\n${note.markdown}`,
-          ),
+            `# ${note.id} — ${note.title}\n\nSource: ${note.url}\n\n${body}${suffix}`,
+          );
+        },
       ),
   );
 
@@ -183,11 +201,23 @@ export async function run(envDirectories: readonly string[] = applicationEnvDire
           ),
       },
     },
-    async ({ number, fileName }) =>
-      runner.execute(
-        () => downloadAttachment(session, config, number, fileName),
-        formatAttachmentDownload,
-      ),
+    async ({ number, fileName }) => {
+      try {
+        const stream = await runner.executeValue(() =>
+          openAttachmentStream(session, config, number, fileName, new AbortController().signal),
+        );
+        const download = await persistAttachmentStream(config, number, stream);
+        return { content: [{ type: "text", text: formatAttachmentDownload(download) }] };
+      } catch (error) {
+        const text =
+          error instanceof SessionExpiredError || error instanceof AccessDeniedError
+            ? safeErrorMessage(error)
+            : error instanceof Error
+              ? `SAP portal request failed: ${safeErrorMessage(error)}`
+              : "SAP portal request failed with an unknown error.";
+        return { isError: true, content: [{ type: "text", text }] };
+      }
+    },
   );
 
   server.registerTool(
@@ -207,7 +237,7 @@ export async function run(envDirectories: readonly string[] = applicationEnvDire
             // Drop the dead context here, because returning false is not an error and so
             // never reaches the runner's recovery path. Without this the server would keep
             // using the expired cookie jar instead of re-reading session.json on the next call.
-            resetTokenCache();
+            resetCaches();
             // Already inside the serialized queue — close directly, do not re-enqueue.
             await session.close().catch(() => undefined);
           }

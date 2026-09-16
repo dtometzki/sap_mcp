@@ -1,13 +1,7 @@
 import { PublicError } from "./errors.js";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import {
-  chromium,
-  type APIRequestContext,
-  type Browser,
-  type BrowserContext,
-  type Page,
-} from "playwright";
+import type { APIRequestContext, Browser, BrowserContext, Page } from "playwright";
 import { buildUrl, type Config } from "./config.js";
 import { assertAllowedPageUrl, isAllowedApiUrl, isAllowedLoginUrl } from "./urls.js";
 
@@ -188,15 +182,6 @@ export function isUsableStorageState(value: unknown): boolean {
   return cookiesAreValid && originsAreValid;
 }
 
-async function hasUsableState(path: string): Promise<boolean> {
-  try {
-    const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
-    return isUsableStorageState(parsed);
-  } catch {
-    return false;
-  }
-}
-
 /** Options for SapSession.start(); the defaults are the server's read-only behaviour. */
 export interface StartOptions {
   /**
@@ -222,31 +207,78 @@ export interface SessionStore {
 }
 
 /**
- * Owns the Playwright browser and the authenticated context.
- * One instance per process; the MCP server keeps it alive between tool calls
- * so the SAP backend does not see a login storm.
+ * Owns the Playwright API context and, lazily, the authenticated browser.
+ * Search, attachment lists and the session probe only need cookies; Chromium
+ * starts when a portal page is opened. One instance per process.
  */
 /** Injectable so start/close races can be tested without launching Chromium. */
 export type CreateBrowser = () => Promise<Pick<Browser, "newContext" | "close">>;
+export type ApiContext = Pick<APIRequestContext, "get" | "post" | "dispose"> & {
+  storageState(): Promise<{ cookies: SessionState["cookies"]; origins?: SessionState["origins"] }>;
+};
+export type CreateApiContext = (state?: SessionState) => Promise<ApiContext>;
+
+async function defaultCreateBrowser(headless: boolean): Promise<Pick<Browser, "newContext" | "close">> {
+  const { chromium } = await import("playwright");
+  return chromium.launch({ headless });
+}
+
+async function defaultCreateApiContext(state?: SessionState): Promise<ApiContext> {
+  const { request } = await import("playwright");
+  return request.newContext(state ? { storageState: state } : {});
+}
+
+/**
+ * Cookie header for `url` from a storage-state snapshot, using the same
+ * domain/path/secure/expiry rules the browser applies. Used when no
+ * BrowserContext is running (HTTP-only session).
+ */
+export function cookieHeaderFromState(state: SessionState, url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "";
+  }
+  const now = Date.now() / 1000;
+  const host = parsed.hostname.toLowerCase();
+  const pathname = parsed.pathname || "/";
+  const cookies = state.cookies.filter((cookie) => {
+    if (cookie.expires !== -1 && cookie.expires > 0 && cookie.expires < now) return false;
+    if (cookie.secure && parsed.protocol !== "https:") return false;
+    const domain = cookie.domain.replace(/^\./, "").toLowerCase();
+    if (host !== domain && !host.endsWith(`.${domain}`)) return false;
+    const path = cookie.path || "/";
+    if (!pathname.startsWith(path)) return false;
+    if (pathname.length !== path.length && !path.endsWith("/") && pathname[path.length] !== "/") return false;
+    return true;
+  });
+  return cookies.map(({ name, value }) => `${name}=${value}`).join("; ");
+}
 
 export class SapSession {
   private browser: Pick<Browser, "newContext" | "close"> | undefined;
   private context: BrowserContext | undefined;
+  private api: ApiContext | undefined;
+  /** Origins (localStorage) from the last full snapshot; API contexts do not store them. */
+  private origins: SessionState["origins"] = [];
   /** Memoized so concurrent callers share one launch instead of racing two browsers. */
   private startPromise: Promise<void> | undefined;
   private closePromise: Promise<void> | undefined;
-  /** Bumped on every close so an in-flight launch discards the browser it just created. */
+  /** Bumped on every full close so an in-flight launch discards what it just created. */
   private generation = 0;
 
   constructor(
     private readonly config: Config,
     private readonly headless: boolean,
     private readonly store?: SessionStore,
-    private readonly createBrowser: CreateBrowser = () => chromium.launch({ headless: this.headless }),
+    private readonly createBrowser: CreateBrowser = () => defaultCreateBrowser(this.headless),
+    private readonly createApiContext: CreateApiContext = defaultCreateApiContext,
   ) {}
 
   /**
-   * Opens the browser and restores the saved session. Throws if no state file exists.
+   * Restores cookies into an HTTP client. Does not launch Chromium — that happens
+   * on the first `open()` / `newPage()`. Throws if no state file exists.
    * Safe to call concurrently and repeatedly; a failed start can be retried.
    */
   start(options: StartOptions = {}): Promise<void> {
@@ -257,28 +289,61 @@ export class SapSession {
     return this.startPromise;
   }
 
+  private async loadStoredState(ignoreStoredState: boolean): Promise<SessionState | undefined> {
+    if (ignoreStoredState) return undefined;
+    if (this.store) {
+      const stored = await this.store.load();
+      return stored !== undefined && isUsableStorageState(stored) ? stored : undefined;
+    }
+    try {
+      const parsed: unknown = JSON.parse(await readFile(this.config.storageStatePath, "utf8"));
+      return isUsableStorageState(parsed) ? (parsed as SessionState) : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   private async doStart({ allowMissingState, ignoreStoredState }: StartOptions): Promise<void> {
     const gen = this.generation;
-    if (this.context) return;
+    if (this.api) return;
 
-    const stored = !ignoreStoredState && this.store ? await this.store.load() : undefined;
-    const hasState = !ignoreStoredState && (this.store
-      ? stored !== undefined && isUsableStorageState(stored)
-      : await hasUsableState(this.config.storageStatePath));
-    if (!hasState && this.headless && !allowMissingState) {
+    const stored = ignoreStoredState ? undefined : await this.loadStoredState(false);
+    if (!stored && this.headless && !allowMissingState) {
       throw new SessionExpiredError();
     }
     if (gen !== this.generation) return;
 
+    const api = await this.createApiContext(stored);
+    if (gen !== this.generation) {
+      await api.dispose().catch(() => undefined);
+      return;
+    }
+    this.api = api;
+    this.origins = stored?.origins ?? [];
+  }
+
+  /**
+   * Launches Chromium only when a portal page is required. Reuses cookies from
+   * the HTTP context so a search after idle does not pay this cost.
+   */
+  private async ensureBrowser(): Promise<BrowserContext> {
+    if (this.context) return this.context;
+    if (!this.api) throw new Error("Session not started");
+    const gen = this.generation;
+    const apiState = await this.api.storageState();
+    const storageState: SessionState = {
+      cookies: apiState.cookies,
+      origins: apiState.origins ?? this.origins,
+    };
     const browser = await this.createBrowser();
     if (gen !== this.generation) {
       await browser.close().catch(() => undefined);
-      return;
+      throw new Error("Session closed during browser launch");
     }
     this.browser = browser;
     try {
       const context = await browser.newContext({
-        storageState: hasState ? (this.store ? stored : this.config.storageStatePath) : undefined,
+        storageState,
         viewport: { width: 1440, height: 900 },
         locale: "en-US",
         // Tool downloads go through fetchAllowedAttachment, not the browser.
@@ -288,12 +353,12 @@ export class SapSession {
         await context.close().catch(() => undefined);
         await browser.close().catch(() => undefined);
         this.browser = undefined;
-        return;
+        throw new Error("Session closed during browser launch");
       }
       context.setDefaultNavigationTimeout(this.config.navigationTimeoutMs);
       this.context = context;
+      return context;
     } catch (error) {
-      // Do not leak the browser process if the context (e.g. corrupt state file) fails.
       await browser.close().catch(() => undefined);
       this.browser = undefined;
       this.context = undefined;
@@ -301,16 +366,29 @@ export class SapSession {
     }
   }
 
+  private async replaceApi(state: SessionState): Promise<void> {
+    const previous = this.api;
+    this.origins = state.origins ?? this.origins;
+    this.api = await this.createApiContext(state);
+    await previous?.dispose().catch(() => undefined);
+  }
+
   /**
    * Navigates and lets late-rendering SPA content settle.
    * Throws SessionExpiredError if the portal redirects to the identity provider.
    */
   async open(url: string): Promise<Page> {
-    if (!this.context) throw new Error("Session not started");
+    const context = await this.ensureBrowser();
     assertAllowedPageUrl(url, "navigation");
 
-    const page = await this.context.newPage();
+    const page = await context.newPage();
     try {
+      // Note extraction drops images/fonts; aborting them here saves the SPA round-trip.
+      await page.route("**/*", (route) => {
+        const type = route.request().resourceType();
+        if (type === "image" || type === "media" || type === "font") return route.abort();
+        return route.continue();
+      });
       const response = await page.goto(url, { waitUntil: "domcontentloaded" });
       assertAllowedPageUrl(page.url(), "navigation");
       if (response?.status() === 401) {
@@ -361,16 +439,20 @@ export class SapSession {
    * state file was readable by other local users.
    */
   async saveState(): Promise<void> {
-    if (!this.context) throw new Error("Session not started");
+    if (!this.api && !this.context) throw new Error("Session not started");
+    const state: SessionState = this.context
+      ? await this.context.storageState()
+      : { cookies: (await this.api!.storageState()).cookies, origins: this.origins };
+    this.origins = state.origins ?? this.origins;
+    if (this.context && this.api) await this.replaceApi(state);
     if (this.store) {
-      await this.store.save(await this.context.storageState());
+      await this.store.save(state);
       return;
     }
     const target = this.config.storageStatePath;
     // Also tightens a pre-existing directory; mkdir's mode only applies when creating.
     await ensurePrivateDirectory(dirname(target));
 
-    const state = await this.context.storageState();
     const temporary = `${target}.${process.pid}.tmp`;
     try {
       await writeFile(temporary, JSON.stringify(state), { mode: 0o600 });
@@ -398,12 +480,12 @@ export class SapSession {
   }
 
   private async probeViaApi(): Promise<ProbeVerdict> {
-    if (!this.context) throw new Error("Session not started");
+    if (!this.api) throw new Error("Session not started");
     const url = buildUrl(this.config.noteDetailApiUrlTemplate, {
       id: probeNoteId(this.config.sessionProbeUrl),
     });
     if (!isAllowedApiUrl(url)) return "unknown";
-    const response = await this.context.request.get(url, {
+    const response = await this.api.get(url, {
       headers: { accept: "application/json" },
       timeout: this.config.apiTimeoutMs,
       maxRedirects: 0,
@@ -450,18 +532,17 @@ export class SapSession {
 
   /** Exposes a raw page for the interactive login flow. */
   async newPage(): Promise<Page> {
-    if (!this.context) throw new Error("Session not started");
-    return this.context.newPage();
+    const context = await this.ensureBrowser();
+    return context.newPage();
   }
 
   /**
-   * Node-side HTTP client that shares the context's cookies (for same-origin SAP calls)
-   * but is not subject to browser CORS — used to hit the Coveo token endpoint and the
-   * Coveo search API directly, without rendering a page.
+   * Cookie-authenticated HTTP client. Lives independently of Chromium so search,
+   * attachment lists and the session probe do not launch a browser.
    */
-  request(): APIRequestContext {
-    if (!this.context) throw new Error("Session not started");
-    return this.context.request;
+  request(): ApiContext {
+    if (!this.api) throw new Error("Session not started");
+    return this.api;
   }
 
   /**
@@ -469,12 +550,48 @@ export class SapSession {
    *
    * BrowserContext.cookies(url) applies the browser's domain/path/secure rules before
    * returning cookies, so callers never forward the complete SAP cookie jar to a host
-   * merely because it appeared in a redirect.
+   * merely because it appeared in a redirect. Without a browser the same rules run
+   * against the HTTP context snapshot.
    */
   async cookieHeader(url: string): Promise<string> {
-    if (!this.context) throw new Error("Session not started");
-    const cookies = await this.context.cookies(url);
-    return cookies.map(({ name, value }) => `${name}=${value}`).join("; ");
+    if (this.context) {
+      const cookies = await this.context.cookies(url);
+      return cookies.map(({ name, value }) => `${name}=${value}`).join("; ");
+    }
+    if (!this.api) throw new Error("Session not started");
+    const state = await this.api.storageState();
+    return cookieHeaderFromState({ cookies: state.cookies, origins: this.origins }, url);
+  }
+
+  /**
+   * Drops Chromium (~200 MB) while keeping the HTTP session. The next page-based
+   * call relaunches the browser; search and status keep using the API context.
+   */
+  async closeBrowser(): Promise<void> {
+    const context = this.context;
+    const browser = this.browser;
+    this.context = undefined;
+    this.browser = undefined;
+    if (context) {
+      try {
+        const state = await context.storageState();
+        await this.replaceApi(state);
+      } catch {
+        // Best-effort cookie hand-off; the HTTP context still has its previous jar.
+      }
+    }
+    let closeError: Error | undefined;
+    try {
+      await context?.close();
+    } catch (error) {
+      closeError = toError(error);
+    }
+    try {
+      await browser?.close();
+    } catch (error) {
+      closeError ??= toError(error);
+    }
+    if (closeError) throw closeError;
   }
 
   async close(): Promise<void> {
@@ -494,8 +611,11 @@ export class SapSession {
 
     const context = this.context;
     const browser = this.browser;
+    const api = this.api;
     this.context = undefined;
     this.browser = undefined;
+    this.api = undefined;
+    this.origins = [];
 
     let closeError: Error | undefined;
     try {
@@ -505,6 +625,11 @@ export class SapSession {
     }
     try {
       await browser?.close();
+    } catch (error) {
+      closeError ??= toError(error);
+    }
+    try {
+      await api?.dispose();
     } catch (error) {
       closeError ??= toError(error);
     }

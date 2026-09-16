@@ -11,6 +11,7 @@ import {
   fetchNote,
   searchNotes,
   resetTokenCache,
+  resetAttachmentListCache,
   type NoteDetail,
   type NoteHit,
   ToolRunner,
@@ -53,10 +54,12 @@ export class BrowserSapGateway implements SapGateway {
         await this.session.start();
         this.abort.signal.throwIfAborted();
       },
-      saveState: () => this.session.saveState(), close: () => this.session.close(), resetTokenCache,
+      saveState: () => this.session.saveState(), close: () => this.session.close(),
+      closeIdle: () => this.session.closeBrowser(),
+      resetTokenCache: () => { resetTokenCache(); resetAttachmentListCache(); },
       reauthenticate: credentials ? async () => {
         try {
-          await performAutoLogin(config, credentials, true, store, this.abort.signal);
+          await performAutoLogin(config, credentials, true, store, this.abort.signal, this.session);
           this.loginError = undefined; this.status = "authenticated";
         } catch (error) {
           this.loginError = error;
@@ -103,6 +106,7 @@ export class BrowserSapGateway implements SapGateway {
     if (this.interactive) return;
     await this.session.close();
     resetTokenCache();
+    resetAttachmentListCache();
     const browser = new SapSession(this.config, false, this.store);
     this.interactive = browser;
     this.status = "interactive";
@@ -193,7 +197,13 @@ export class WebService {
       const epoch = this.epoch;
       const hits = await this.sap().search(query, limit);
       this.assert(epoch);
-      await this.vault.update(data => { data.history.unshift({ id: randomUUID(), query, limit, count: hits.length, at: new Date().toISOString() }); });
+      return hits;
+    }).then(async (hits) => {
+      try {
+        await this.vault.update(data => {
+          data.history.unshift({ id: randomUUID(), query, limit, count: hits.length, at: new Date().toISOString() });
+        });
+      } catch { /* A failed history write must not fail a successful search. */ }
       return hits;
     });
   }

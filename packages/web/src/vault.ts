@@ -102,6 +102,15 @@ export class Vault {
     if (!this.data || !this.key) throw locked();
     return structuredClone(this.data.favorites);
   }
+  /** Read-only view for HTTP list handlers; callers must not mutate. */
+  peekHistory(): readonly HistoryEntry[] {
+    if (!this.data || !this.key) throw locked();
+    return this.data.history;
+  }
+  peekFavorites(): readonly Favorite[] {
+    if (!this.data || !this.key) throw locked();
+    return this.data.favorites;
+  }
   private serial<T>(fn: () => Promise<T>): Promise<T> {
     const task = this.queue.then(fn);
     this.queue = task.catch(() => undefined);

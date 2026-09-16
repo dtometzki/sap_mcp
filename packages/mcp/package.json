@@ -1,5 +1,5 @@
 {
-  "version": "1.15.1",
+  "version": "1.16.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -13,7 +13,7 @@
     "lint": "eslint src",
     "test": "npm run build && node --test dist/*.test.js",
     "start": "node dist/server.js",
-    "login": "npm run build && node dist/login.js",
+    "login": "node dist/login.js",
     "test-search": "node dist/test-search.js",
     "diagnose-search": "node dist/diagnose-search.js",
     "browser:install": "playwright install chromium"
@@ -21,6 +21,6 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
     "zod": "^3.23.8",
-    "@sap-notes/core": "1.15.1"
+    "@sap-notes/core": "1.16.0"
   }
 }

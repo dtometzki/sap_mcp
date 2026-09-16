@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { limitResponseBody, openAttachmentStream } from "./attachments.js";
+import { limitResponseBody, openAttachmentStream, resetAttachmentListCache } from "./attachments.js";
 import { loadConfig } from "./config.js";
 import { AccessDeniedError, SessionExpiredError, type SapSession } from "./session.js";
 
@@ -34,6 +34,7 @@ test("limited response bodies settle the watchdog when the consumer cancels", as
 });
 
 test("streamed transfer resolves exact note attachments, scopes cookies and rejects portal errors", async () => {
+  resetAttachmentListCache();
   const config = loadConfig();
   const fileName = "SQLStatements.zip";
   const url = "https://me.sap.com/attachment/collection";

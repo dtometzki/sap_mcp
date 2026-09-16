@@ -6,6 +6,7 @@ import test from "node:test";
 import { buildUrl, loadConfig } from "./config.js";
 import {
   coerceField,
+  extractNoteFromDetail,
   extractNoteId,
   isTransientError,
   mapCoveoResult,
@@ -28,6 +29,7 @@ import {
   extractAttachments,
   fetchAllowedAttachment,
   fetchAttachmentList,
+  resetAttachmentListCache,
   fileNameFromHref,
   formatAttachmentDownload,
   formatAttachmentList,
@@ -397,6 +399,29 @@ test("formatAttachmentList omits download URLs", () => {
   assert.doesNotMatch(text, /me\.sap\.com/);
 });
 
+test("extractNoteFromDetail reads title and HTML sections and ignores attachments", () => {
+  const extracted = extractNoteFromDetail(
+    {
+      Response: {
+        SAPNote: {
+          Title: { value: "3696257 - ECS checks | SAP for Me" },
+          LongText: { value: "<h3>Symptom</h3><p>The database pre-migration check reports an error that must be resolved before the conversion.</p><h3>Solution</h3><p>Apply the attached SQL scripts and repeat the check.</p>" },
+          Attachments: { Items: [{ Filename: "x.txt", URL: "/dl/x" }] },
+        },
+      },
+    },
+    "3696257",
+  );
+  assert.ok(extracted);
+  assert.equal(extracted.title, "ECS checks");
+  assert.match(extracted.html, /Symptom/);
+  assert.match(extracted.html, /attached SQL/);
+});
+
+test("extractNoteFromDetail returns undefined when the payload has no document body", () => {
+  assert.equal(extractNoteFromDetail({ Response: { SAPNote: { Title: { value: "Empty" } } } }, "1"), undefined);
+});
+
 test("extractAttachments returns [] for payloads without attachments", () => {
   assert.deepEqual(extractAttachments({ Response: { SAPNote: {} } }, DETAIL_API_BASE), []);
   assert.deepEqual(extractAttachments(null, DETAIL_API_BASE), []);
@@ -569,6 +594,7 @@ function fakeAttachmentSession(anchors: { href: string; text: string }[]) {
 }
 
 test("fetchAttachmentList reports the API error when the DOM fallback is empty", async () => {
+  resetAttachmentListCache();
   const config = loadConfig();
   await assert.rejects(
     fetchAttachmentList(fakeAttachmentSession([]), config, "1234567"),
@@ -577,6 +603,7 @@ test("fetchAttachmentList reports the API error when the DOM fallback is empty",
 });
 
 test("fetchAttachmentList still answers from the DOM fallback when it finds files", async () => {
+  resetAttachmentListCache();
   const config = loadConfig();
   const attachments = await fetchAttachmentList(
     fakeAttachmentSession([

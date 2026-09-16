@@ -1,6 +1,6 @@
 {
   "name": "sap-notes-mcp",
-  "version": "1.15.1",
+  "version": "1.16.0",
   "private": true,
   "description": "SAP Notes MCP and web applications with a shared library",
   "type": "module",

@@ -121,6 +121,7 @@ export function createWebServer(service: WebService, options: WebServerOptions =
     ["/app.css", { url: new URL("../public/app.css", import.meta.url), type: "text/css; charset=utf-8" }],
     ["/app.js", { url: new URL("./client.js", import.meta.url), type: "text/javascript; charset=utf-8" }],
   ]);
+  const assetBodies = new Map<string, Buffer>();
   const server = createServer((request, response) => {
     void handle(request, response).catch(() => {
       if (!response.headersSent) json(response, 500, { code: "INTERNAL_ERROR", message: "Die Anfrage konnte nicht verarbeitet werden." });
@@ -154,7 +155,8 @@ export function createWebServer(service: WebService, options: WebServerOptions =
       const path = url.pathname;
       const asset = assets.get(path);
       if (method === "GET" && asset) {
-        const file = await readFile(asset.url);
+        let file = assetBodies.get(path);
+        if (!file) { file = await readFile(asset.url); assetBodies.set(path, file); }
         response.writeHead(200, { "Content-Type": asset.type }); response.end(file); return;
       }
       if (path === "/api/about" && method === "GET") {
@@ -164,8 +166,8 @@ export function createWebServer(service: WebService, options: WebServerOptions =
       const hasSession = (): boolean => cookie !== undefined && sessions.has(cookie) && service.vault.unlocked && !locking;
       const valid = hasSession();
       if (path === "/api/state" && method === "GET") {
-        const exists = await service.vault.exists();
         const unlocked = hasSession();
+        const exists = unlocked || service.vault.unlocked || await service.vault.exists();
         json(response, 200, { exists, unlocked, ...(unlocked ? { username: service.vault.username, sap: service.status } : {}) }); return;
       }
       if ((path === "/api/setup" || path === "/api/unlock") && method === "POST") {
@@ -207,18 +209,18 @@ export function createWebServer(service: WebService, options: WebServerOptions =
         const query = z.string().max(500).parse(url.searchParams.get("q") ?? "");
         const tag = z.string().max(40).parse(url.searchParams.get("tag") ?? "");
         const offset = z.coerce.number().int().min(0).parse(url.searchParams.get("offset") ?? 0);
-        const all = service.vault.favorites;
+        const all = service.vault.peekFavorites();
         const entries = filterFavorites(all, query, tag);
         const tags = new Map<string, string>();
         for (const entry of all) for (const value of entry.tags) tags.set(value.toLocaleLowerCase("de"), value);
         result = { entries: entries.slice(offset, offset + 50), total: entries.length, tags: [...tags.values()].sort((a, b) => a.localeCompare(b, "de")) };
       } else if (path.startsWith("/api/favorites/") && ["GET", "PUT", "DELETE"].includes(method)) {
         const number = favoriteNumberSchema.parse(path.slice("/api/favorites/".length));
-        if (method === "GET") result = { favorite: service.vault.favorites.find(entry => entry.number === number) ?? null };
+        if (method === "GET") result = { favorite: service.vault.peekFavorites().find(entry => entry.number === number) ?? null };
         else {
           const raw = await authorizedBody();
           const input = method === "PUT" ? favoriteInputSchema.parse(raw) : undefined;
-          await service.run(() => service.vault.update(data => {
+          await service.vault.update(data => {
             const existing = data.favorites.find(entry => entry.number === number);
             if (input) {
               if (!existing && data.favorites.length >= MAX_FAVORITES) throw new WebError("FAVORITES_FULL", `Maximal ${MAX_FAVORITES} Favoriten. Bitte zuerst einen Favoriten entfernen.`, 409);
@@ -226,8 +228,8 @@ export function createWebServer(service: WebService, options: WebServerOptions =
               data.favorites = data.favorites.filter(entry => entry.number !== number);
               data.favorites.unshift({ ...input, number, createdAt: existing?.createdAt ?? now, updatedAt: now });
             } else data.favorites = data.favorites.filter(entry => entry.number !== number);
-          }));
-          result = { favorite: service.vault.favorites.find(entry => entry.number === number) ?? null };
+          });
+          result = { favorite: service.vault.peekFavorites().find(entry => entry.number === number) ?? null };
         }
       } else if (path === "/api/attachments/list" && method === "POST") {
         const { number } = attachmentListSchema.parse(await authorizedBody());
@@ -262,7 +264,7 @@ export function createWebServer(service: WebService, options: WebServerOptions =
       } else if (path.startsWith("/api/notes/") && method === "GET") {
         const note = await service.note(numberSchema.parse(path.slice("/api/notes/".length)));
         const number = favoriteNumberSchema.parse(note.id);
-        result = { ...note, html: renderNote(note.markdown), favorite: service.vault.favorites.find(entry => entry.number === number) ?? null };
+        result = { id: note.id, title: note.title, url: note.url, html: renderNote(note.markdown), favorite: service.vault.peekFavorites().find(entry => entry.number === number) ?? null };
       } else if (path === "/api/credentials" && (method === "PUT" || method === "DELETE")) {
         const input = await authorizedBody();
         await service.credentials(method === "PUT" ? credentialsSchema.parse(input) : undefined);
@@ -284,12 +286,12 @@ export function createWebServer(service: WebService, options: WebServerOptions =
       } else if (path === "/api/history" && method === "GET") {
         const query = z.string().max(500).parse(url.searchParams.get("q") ?? "").toLocaleLowerCase("de");
         const offset = z.coerce.number().int().min(0).parse(url.searchParams.get("offset") ?? 0);
-        const entries = service.vault.history.filter(entry => entry.query.toLocaleLowerCase("de").includes(query));
+        const entries = service.vault.peekHistory().filter(entry => entry.query.toLocaleLowerCase("de").includes(query));
         result = { entries: entries.slice(offset, offset + 50), total: entries.length };
       } else if ((path === "/api/history" || path.startsWith("/api/history/")) && method === "DELETE") {
         await authorizedBody();
         const id = path === "/api/history" ? undefined : z.string().uuid().parse(path.slice("/api/history/".length));
-        await service.run(() => service.vault.update(data => { data.history = id ? data.history.filter(entry => entry.id !== id) : []; }));
+        await service.vault.update(data => { data.history = id ? data.history.filter(entry => entry.id !== id) : []; });
         result = { deleted: true };
       } else throw new WebError("NOT_FOUND", "Nicht gefunden.", 404);
       if (generation !== started || !service.vault.unlocked || !cookie || !sessions.has(cookie)) throw locked();

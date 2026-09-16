@@ -50,8 +50,9 @@ export interface Config {
   /** Extra settle time after network idle, for late client-side rendering. */
   renderSettleMs: number;
   /**
-   * Close the headless browser after this many milliseconds without a tool call
-   * (frees ~200 MB RAM); the next call relaunches it lazily. 0 disables.
+   * Close Chromium after this many milliseconds without a tool call (frees ~200 MB
+   * RAM). The cookie HTTP client stays; search and status do not relaunch a browser.
+   * The next page-based call relaunches Chromium lazily. 0 disables.
    */
   idleTimeoutMs: number;
   /** S-user for the login form (SAPUSER, legacy: SAP_USERNAME). */

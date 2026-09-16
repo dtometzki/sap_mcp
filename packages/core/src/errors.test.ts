@@ -4,7 +4,7 @@ import { request } from "playwright";
 import { PublicError, safeErrorMessage } from "./errors.js";
 import { loadConfig } from "./config.js";
 import { resetTokenCache, searchNotes } from "./notes.js";
-import { fetchAttachmentList } from "./attachments.js";
+import { fetchAttachmentList, resetAttachmentListCache } from "./attachments.js";
 import { SessionExpiredError, type SapSession } from "./session.js";
 import { ToolRunner } from "./toolRunner.js";
 
@@ -89,6 +89,7 @@ test("search and attachment fallback logs and composed MCP errors stay free of s
   } as unknown as SapSession;
   const config = loadConfig();
   resetTokenCache();
+  resetAttachmentListCache();
   for (const operation of [
     () => searchNotes(session, config, "hana", 1),
     () => fetchAttachmentList(session, config, "1234567"),

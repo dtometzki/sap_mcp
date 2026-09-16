@@ -11,7 +11,7 @@ export const favoriteInputSchema = z.object({
 export const favoriteSchema = favoriteInputSchema.extend({ number: favoriteNumberSchema, createdAt: z.string().datetime(), updatedAt: z.string().datetime() });
 export type Favorite = z.infer<typeof favoriteSchema>;
 
-export function filterFavorites(entries: Favorite[], query: string, tag: string): Favorite[] {
+export function filterFavorites(entries: readonly Favorite[], query: string, tag: string): Favorite[] {
   const needle = query.trim().toLocaleLowerCase("de");
   const wantedTag = tag.trim().toLocaleLowerCase("de");
   return entries.filter(entry => (!wantedTag || entry.tags.some(item => item.toLocaleLowerCase("de") === wantedTag)) &&

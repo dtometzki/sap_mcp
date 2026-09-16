@@ -1,6 +1,35 @@
 import TurndownService from "turndown";
 
 /**
+ * Cheap readiness check for waitForFunction: no cloning. Same heading rules as
+ * extractNoteDocument, so a headings-only shell keeps polling.
+ */
+export function noteDocumentIsReady(id: string): boolean {
+  const chrome = "nav, [role='navigation'], [role='banner'], [role='toolbar'], [role='tablist'], [hidden], [aria-hidden='true']";
+  const headingText = (element: Element): string => (element.textContent ?? "").replace(/\s+/g, " ").trim().replace(/:$/, "");
+  const headings = [...document.querySelectorAll("h1, h2, h3, h4, h5, h6, [role='heading']")]
+    .filter(element => !element.closest(chrome) && element.getClientRects().length > 0);
+  const contentHeading = /^(symptom|symptoms|environment|cause|reason and prerequisites|other terms|solution|resolution|reproducing the issue|problem|umgebung|ursache(?: und voraussetzungen)?|weitere begriffe|lösung)$/i;
+  const first = headings.find(element => contentHeading.test(headingText(element)));
+  if (first) {
+    const after = headings.slice(headings.indexOf(first) + 1);
+    const boundary = after.find(element => /^(available languages|verfügbare sprachen)$/i.test(headingText(element)));
+    const scope = boundary
+      ? first.parentElement ?? document.body
+      : ([...document.querySelectorAll("article, main, [role='main'], .sapMPage, #content")]
+        .filter(element => element.contains(first) && after.filter(item => contentHeading.test(headingText(item))).every(item => element.contains(item)))
+        .sort((a, b) => a.contains(b) ? 1 : b.contains(a) ? -1 : 0)[0] ?? document.body);
+    const text = (scope.textContent ?? "").replace(/\s+/g, " ").trim();
+    return text.length >= 80;
+  }
+  const article = [...document.querySelectorAll("article")].find(element =>
+    headings.some(heading => element.contains(heading) && headingText(heading).startsWith(id)) &&
+    element.querySelector("p, table, ul, ol"));
+  if (!article) return false;
+  return (article.textContent ?? "").replace(/\s+/g, " ").trim().length >= 50;
+}
+
+/**
  * Runs inside the SAP page (evaluate/waitForFunction): no module-scope references.
  * A portal shell is not a note. Anchor extraction on actual document headings,
  * even when SAP wraps both the navigation and document in one .sapMPage.
@@ -53,9 +82,16 @@ export function extractNoteDocument(id: string): string | null {
     } catch { link.removeAttribute("href"); }
   }
   // A rendered heading without its asynchronously loaded body is still incomplete.
-  const copy = container.cloneNode(true) as HTMLElement;
-  for (const heading of copy.querySelectorAll("h1,h2,h3,h4,h5,h6,[role='heading']")) heading.remove();
-  if ((copy.textContent ?? "").replace(/\s+/g, " ").trim().length < 50) return null;
+  let bodyChars = 0;
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    const parent = (node as Text).parentElement;
+    if (parent?.closest("h1, h2, h3, h4, h5, h6, [role='heading']")) continue;
+    bodyChars += (node.textContent ?? "").replace(/\s+/g, " ").trim().length;
+    if (bodyChars >= 50) break;
+  }
+  if (bodyChars < 50) return null;
   return container.innerHTML;
 }
 
