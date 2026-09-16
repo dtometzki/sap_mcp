@@ -196,9 +196,11 @@ async function bannerText(page: Page, selector: string): Promise<string> {
 }
 
 /**
- * Full non-interactive login: fresh browser, form, verification, saved session state.
- * Always closes its own browser — this runs on the server's error path, where a leaked
- * Chromium would accumulate with every expired session.
+ * Full non-interactive login: form, verification, saved session state.
+ *
+ * When `existing` is omitted a throwaway session is created and always closed
+ * (login CLI). When the MCP/web runner passes its own session, a successful
+ * login keeps that browser so the following retry does not launch Chromium again.
  */
 export async function performAutoLogin(
   config: Config,
@@ -206,8 +208,10 @@ export async function performAutoLogin(
   headless = true,
   store?: SessionStore,
   signal?: AbortSignal,
+  existing?: SapSession,
 ): Promise<void> {
-  const session = new SapSession(config, headless, store);
+  const owned = existing === undefined;
+  const session = existing ?? new SapSession(config, headless, store);
   const abort = (): void => { void session.close().catch(() => undefined); };
   signal?.addEventListener("abort", abort, { once: true });
   try {
@@ -228,8 +232,11 @@ export async function performAutoLogin(
     }
     signal?.throwIfAborted();
     await session.saveState();
+  } catch (error) {
+    if (!owned) await session.close().catch(() => undefined);
+    throw error;
   } finally {
     signal?.removeEventListener("abort", abort);
-    await session.close().catch(() => undefined);
+    if (owned) await session.close().catch(() => undefined);
   }
 }

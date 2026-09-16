@@ -29,7 +29,7 @@ async function copyRuntime(app, target) {
   await mkdir(join(target, 'dist'), { recursive: true });
   // Allowlist runtime files; never copy a checkout, local config, tests or user data.
   for (const file of await readdir(join(source, 'dist'))) {
-    if (!file.includes('.test.') && (file.endsWith('.js') || file.endsWith('.d.ts'))) {
+    if (!file.includes('.test.') && file.endsWith('.js')) {
       await cp(join(source, 'dist', file), join(target, 'dist', file));
     }
   }

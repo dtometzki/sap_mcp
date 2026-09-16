@@ -54,7 +54,9 @@ des Terminals, nicht aber Abmelden oder Neustart des Rechners – danach erneut
    die gespeicherten Angaben; dort lässt sich der Favorit auch entfernen.
 6. Unter **Favoriten** nach Nummer, Titel, Stichwörtern oder eigener Notiz suchen,
    nach einem Stichwort filtern und Notes direkt öffnen. Beim Öffnen lädt die App
-   den aktuellen Inhalt von SAP. Die Liste zeigt die zuletzt bearbeiteten zuerst
+   den aktuellen Inhalt von SAP. Ein erneuter Klick auf denselben Treffer in der
+   Suchliste lädt die bereits angezeigte Note nicht noch einmal. Die Liste zeigt
+   die zuletzt bearbeiteten zuerst
    und umfasst maximal 500 Favoriten; weitere Einträge laden jeweils 50 nach.
    Vorhandene Tresore werden automatisch um eine leere Favoritenliste ergänzt.
    Favoriten bleiben beim Löschen des Suchverlaufs oder Wechseln des SAP-Kontos

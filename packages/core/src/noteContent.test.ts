@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { chromium, type Browser, type Page } from "playwright";
-import { extractNoteDocument, noteHtmlToMarkdown } from "./noteContent.js";
+import { extractNoteDocument, noteDocumentIsReady, noteHtmlToMarkdown } from "./noteContent.js";
 import { fetchNote } from "./notes.js";
 import { loadConfig } from "./config.js";
 import type { SapSession } from "./session.js";
@@ -29,6 +29,7 @@ test("note extraction excludes the portal shell, keeps all document sections and
       ${description}<section><h3>This document refers to</h3><p>Reference details remain available.</p></section>
       <section><h3>Available Languages</h3><ul><li>Deutsch (Machine Translation)</li></ul></section></main>
       <footer>Legal Feedback</footer></div>`);
+    assert.equal(await page.evaluate(noteDocumentIsReady, "3250501"), true);
     const html = await page.evaluate(extractNoteDocument, "3250501"); assert.ok(html);
     const markdown = noteHtmlToMarkdown(html);
     for (const unwanted of ["SAP for Me", "SearchCancel", "Dashboard", "Menu", "Logo", "data:image", "Download for SNOTE", "Show Changes", "Available Languages", "Hidden portal state", "Example document", "Legal Feedback"]) assert.ok(!markdown.includes(unwanted), unwanted);
@@ -43,7 +44,10 @@ test("fetchNote waits for asynchronously rendered content instead of accepting t
   try {
     await page.setContent(`<title>3250501 - Example document | SAP for Me</title><div class="sapMPage">${shell}<main id="document"></main></div>`);
     await page.evaluate(html => { setTimeout(() => { document.getElementById("document")!.innerHTML = html; }, 250); }, description);
-    const session = { withOpenPage: async (_url: string, fn: (page: Page) => Promise<unknown>) => fn(page) };
+    const session = {
+      request: () => ({ get: () => Promise.reject(new Error("API unavailable in fixture")) }),
+      withOpenPage: async (_url: string, fn: (page: Page) => Promise<unknown>) => fn(page),
+    };
     const note = await fetchNote(session as unknown as SapSession, { ...loadConfig(), navigationTimeoutMs: 3000 }, "3250501");
     assert.equal(note.title, "Example document"); assert.match(note.markdown, /observed problem/); assert.doesNotMatch(note.markdown, /Dashboard/);
   } finally { await browser.close(); }
@@ -54,10 +58,14 @@ test("shell-only pages and empty document headings do not count as readable note
   const page = await browser.newPage();
   try {
     await page.setContent(`<div class="sapMPage">${shell}<main><h1>3250501 - Example document</h1></main></div>`);
+    assert.equal(await page.evaluate(noteDocumentIsReady, "3250501"), false);
     assert.equal(await page.evaluate(extractNoteDocument, "3250501"), null);
     await page.setContent(`${shell}<main><h3>Symptom</h3><h3>Solution</h3></main>`);
     assert.equal(await page.evaluate(extractNoteDocument, "3250501"), null);
-    const session = { withOpenPage: async (_url: string, fn: (value: typeof page) => Promise<unknown>) => fn(page) };
+    const session = {
+      request: () => ({ get: () => Promise.reject(new Error("API unavailable in fixture")) }),
+      withOpenPage: async (_url: string, fn: (value: typeof page) => Promise<unknown>) => fn(page),
+    };
     await assert.rejects(fetchNote(session as unknown as SapSession, { ...loadConfig(), navigationTimeoutMs: 100 }, "3250501"), /no readable document sections/);
   } finally { await browser.close(); }
 });

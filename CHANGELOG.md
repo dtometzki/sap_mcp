@@ -7,6 +7,35 @@ die Versionierung an [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [1.16.0] – 2026-09-16
+
+### Hinzugefügt
+- HTTP-Session ohne Chromium für Suche, Session-Status und Anhangsliste; der Browser
+  startet erst für Note-Inhalt, DOM-Fallbacks und Login.
+- `fetchNote` versucht zuerst die Note-Detail-JSON-API und fällt bei fehlendem Text
+  auf die gerenderte Seite zurück.
+
+### Geändert
+- Idle schließt nur Chromium; der Cookie-HTTP-Context bleibt für die nächste Suche.
+- Auto-Login behält den angemeldeten Browser, statt ihn zu schließen und neu zu starten.
+- MCP-Anhangdownload gibt die Tool-Warteschlange nach den Response-Headern frei und
+  schreibt die Datei danach; andere Tools warten nicht auf den kompletten Transfer.
+- Anhanglisten werden kurz (60 s) je Note zwischengespeichert; Session-Wechsel leert den Cache.
+- Coveo holt `min(50, max(limit×3, 15))` Treffer und keine Excerpts.
+- Lange Notes in der MCP-Antwort auf 80 000 Zeichen gekürzt, mit Hinweis auf die Portal-URL.
+- Web: Favoriten- und Verlaufsänderungen laufen nicht mehr hinter einer SAP-Suche.
+- Web: erneuter Klick auf die bereits geöffnete Note in der Trefferliste lädt nicht neu.
+- Statische Web-Assets werden im Speicher gehalten; `/api/state` macht kein `stat`, solange
+  die Sitzung entsperrt ist.
+- Playwright wird erst beim ersten Browser- bzw. HTTP-Context geladen.
+- MCP-`login`-Skript im Paket startet ohne vorherigen TypeScript-Build.
+- Installationsarchive enthalten keine `.d.ts`-Dateien.
+
+### Behoben
+- `extractNoteDocument` klont die DOM nicht mehr bei jedem 200-ms-Poll nur für die Längenprüfung.
+- Fehlgeschlagene Anhang-Downloads werden nicht mehr nach bereits empfangenen Bytes von vorn wiederholt.
+- Download-Object-URLs in der Web-UI werden nach einer Minute freigegeben.
+
 ## [1.15.1] – 2026-09-15
 
 ### Behoben

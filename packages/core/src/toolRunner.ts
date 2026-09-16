@@ -10,8 +10,13 @@ export interface ToolRunnerDeps {
   ensureSession(): Promise<void>;
   /** Persists the browser's refreshed cookies back to the state file. */
   saveState(): Promise<void>;
-  /** Closes the browser context. */
+  /** Closes the HTTP session and any Chromium instance. */
   close(): Promise<void>;
+  /**
+   * Idle path: drop Chromium (~200 MB) but keep the cookie HTTP client so the
+   * next search/status call does not relaunch a browser. Falls back to `close`.
+   */
+  closeIdle?: () => Promise<void>;
   /** Drops cached tokens (Coveo) when the underlying session changes. */
   resetTokenCache(): void;
   /**
@@ -134,7 +139,7 @@ export class ToolRunner {
     if (this.options.idleTimeoutMs <= 0) return; // 0 disables the idle shutdown
     this.idleTimer = setTimeout(() => {
       // Enqueue via the request queue so we never close mid-operation.
-      this.runSerialized(() => this.deps.close()).catch(() => undefined);
+      this.runSerialized(() => (this.deps.closeIdle ?? this.deps.close)()).catch(() => undefined);
     }, this.options.idleTimeoutMs);
     this.idleTimer.unref(); // the timer alone must not keep the process alive
   }

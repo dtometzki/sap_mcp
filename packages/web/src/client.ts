@@ -152,6 +152,7 @@ function attachmentDownloadButton(number: string, fileName: string, sequence: nu
       const url = URL.createObjectURL(value.blob); downloadUrls.add(url);
       const link = node("a"); link.href = url; link.download = value.fileName;
       document.body.append(link); link.click(); link.remove();
+      setTimeout(() => { URL.revokeObjectURL(url); downloadUrls.delete(url); }, 60_000);
       message(`„${value.fileName}“ wurde an den Browser übergeben. Falls ein Speicherdialog erscheint, mit „Sichern“ bestätigen.`);
     } finally { button.textContent = label; }
   }, button); });
@@ -229,7 +230,7 @@ async function favorites(more = false): Promise<void> {
     const row = node("div", undefined, "favorite-item");
     const info = node("div", undefined, "favorite-info");
     const open = node("button", `${entry.number} · ${entry.title}`, "favorite-open");
-    open.addEventListener("click", () => { showView("search"); void action(() => openNote(entry.number), open); });
+    open.addEventListener("click", () => { showView("search"); void action(() => openNote(entry.number, true), open); });
     info.append(open);
     const tags = node("div", undefined, "favorite-tags");
     for (const tag of entry.tags) {
@@ -266,8 +267,12 @@ async function saveFavorite(remove = false): Promise<void> {
     el("favorite-error").hidden = false;
   }
 }
-async function openNote(number: string): Promise<{ id: string; title: string }> {
+async function openNote(number: string, force = false): Promise<{ id: string; title: string }> {
   if (!/^\d{4,10}$/.test(number)) throw new Error("Eine Note-Nummer besteht aus 4 bis 10 Ziffern.");
+  if (!force && currentNote && Number(currentNote.number) === Number(number) && el("note-content").querySelector(".note-body")) {
+    for (const hit of document.querySelectorAll<HTMLButtonElement>(".result")) hit.classList.toggle("selected", hit.dataset.number === number);
+    return { id: currentNote.number, title: currentNote.title };
+  }
   const sequence = ++noteSequence;
   currentNote = undefined;
   el("note-content").replaceChildren(node("p", `Note ${number} wird geladen …`, "empty"));

@@ -16,7 +16,9 @@ authentifizierten Browser-Session (Playwright):
    ohne Neustart ein. Fehlt dem S-User dagegen nur die **Berechtigung** für eine bestimmte
    Note (HTTP 403), wird das als solches gemeldet; ein erneuter Login ändert daran nichts.
 5. Nach längerer Inaktivität (Default 10 min) beendet der Server den headless Browser,
-   um RAM zu sparen; der nächste Tool-Aufruf startet ihn automatisch neu.
+   um RAM zu sparen. Suche, Session-Status und Anhangsliste laufen weiter über den
+   HTTP-Context (Cookies, ohne Chromium). Note-Inhalt, DOM-Fallbacks und Login starten
+   den Browser bei Bedarf erneut.
 
 ## Installation aus dem Download-Archiv
 
@@ -192,7 +194,7 @@ Antwort des Portals.
 | `SAP_COVEO_SEARCH_URL` | Coveo REST Search v2 | Such-Endpunkt inkl. Organisation |
 | `SAP_COVEO_SEARCH_HUB` | `SAP for Me` | Coveo Search Hub / Pipeline-Kontext |
 | `SAP_NOTE_URL` | `https://me.sap.com/notes/{id}` | Detail-URL (`{id}`) |
-| `SAP_NOTE_API_URL` | `https://me.sap.com/backend/raw/sapnotes/Detail?q={id}&t=E&isVTEnabled=false` | JSON-API hinter der Note-Seite; Quelle der Anhangsliste (`{id}`) |
+| `SAP_NOTE_API_URL` | `https://me.sap.com/backend/raw/sapnotes/Detail?q={id}&t=E&isVTEnabled=false` | JSON-API hinter der Note-Seite; Quelle von Note-Text und Anhangsliste (`{id}`) |
 | `SAP_ATTACHMENT_DIR` | `~/Downloads/sap-notes` | Zielordner für Anhänge (ein Unterordner je Note-Nummer mit `0700`, `~` wird expandiert) |
 | `SAP_ATTACHMENT_COOKIE_HOSTS` | – | Zusätzliche Hosts, die beim Anhang-Download Session-Cookies erhalten dürfen (kommagetrennt; Default: `me.sap.com`, `*.support.sap.com`, `accounts.sap.com`) |
 | `SAP_PROBE_URL` | `https://me.sap.com/notes/2170696` | Seite zur Session-Prüfung; muss `https://*.sap.com` oder `https://*.sap.cn` sein. Die Prüfung fragt zuerst `SAP_NOTE_API_URL` für dieselbe Note-Nummer ab und rendert die Seite nur bei mehrdeutiger Antwort |
@@ -200,7 +202,7 @@ Antwort des Portals.
 | `SAP_API_TIMEOUT_MS` | `60000` | Timeout für direkte HTTP-API-Aufrufe (Coveo-Token/-Suche, Note-Detail-API); beim Anhang-Download maximale Wartezeit zwischen zwei Datenblöcken |
 | `SAP_NETWORK_IDLE_TIMEOUT_MS` | `0` | Optionale Wartezeit auf Netzwerk-Ruhe nach dem Öffnen einer Portal-Seite; 0 überspringt sie (Default). Das Portal hält Verbindungen offen, der Timeout greift fast immer — Note-Inhalt und DOM-Fallbacks warten stattdessen auf den gerenderten Inhalt |
 | `SAP_RENDER_SETTLE_MS` | `2500` | Wartezeit für spätes SPA-Rendering |
-| `SAP_IDLE_TIMEOUT_MS` | `600000` | Browser nach Inaktivität schließen (0 = deaktiviert) |
+| `SAP_IDLE_TIMEOUT_MS` | `600000` | Chromium nach Inaktivität schließen (0 = deaktiviert); der HTTP-Context bleibt |
 | `SAPUSER` | – | S-User für Login-CLI und automatischen Login (Alt-Name: `SAP_USERNAME`) |
 | `SAPPASSWORD` | – | Passwort für den automatischen Login (Alt-Name: `SAP_PASSWORD`); nur zusammen mit `SAPUSER` wirksam |
 | `SAP_AUTO_LOGIN` | `1` | Automatischen Re-Login des Servers abschalten (`0`), ohne Credentials zu entfernen |
@@ -220,11 +222,14 @@ bis `2147483647` liegen; `0` ist nur bei den ausdrücklich abschaltbaren Optione
 Der Server benutzt bewusst **keine** hartkodierten CSS-Klassen:
 
 * Suche = alle Links, deren `href` auf eine Note-Nummer zeigt (`/notes/<n>`, `/knowledge/en/<n>`, …).
-* Detail = auf fachliche Note-Abschnitte (z. B. „Symptom“ / „Solution“) warten und
-  deren Inhalt ohne Portal-Navigation, Werkzeugleisten oder Sprachauswahl übernehmen.
-  Explizite Artikel ohne diese Abschnittsnamen benötigen einen passenden Note-Titel;
-  eine reine Portal-Oberfläche wird nicht als Note akzeptiert. Tabellen und
-  Referenzlinks bleiben in Markdown erhalten, Bilder werden ausgelassen.
+* Detail = zuerst die Note-Detail-JSON-API (derselbe Endpunkt wie die Anhangsliste);
+  fehlt dort ein lesbarer Text, wartet der Server auf fachliche Abschnitte
+  (z. B. „Symptom“ / „Solution“) der gerenderten Seite und übernimmt deren Inhalt
+  ohne Portal-Navigation, Werkzeugleisten oder Sprachauswahl. Explizite Artikel ohne
+  diese Abschnittsnamen benötigen einen passenden Note-Titel; eine reine Portal-
+  Oberfläche wird nicht als Note akzeptiert. Tabellen und Referenzlinks bleiben in
+  Markdown erhalten, Bilder werden ausgelassen. Sehr lange Notes werden in der
+  MCP-Antwort gekürzt; die vollständige Quelle bleibt die Portal-URL.
 * Anhänge = Note-Detail-JSON-API zuerst; schlägt sie fehl, werden Anhang-Links
   (`…attachment…`, `/documents/…`) aus der gerenderten Note-Seite gelesen.
   Heruntergeladen wird ausschliesslich per HTTPS von `*.sap.com`-Hosts.

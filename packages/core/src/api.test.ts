@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import test from "node:test";
 import { request, type APIRequestContext, type APIResponse } from "playwright";
 import { rejectApiRedirect } from "./api.js";
-import { fetchAttachmentList } from "./attachments.js";
+import { fetchAttachmentList, resetAttachmentListCache } from "./attachments.js";
 import { loadConfig } from "./config.js";
 import { resetTokenCache, searchNotes } from "./notes.js";
 import { SessionExpiredError, type SapSession } from "./session.js";
@@ -89,6 +89,7 @@ test("token, search and detail calls never follow HTTP redirects", async (t) => 
     for (phase of ["token", "search", "detail"]) {
       for (redirectStatus of [301, 302, 303, 307, 308]) {
         resetTokenCache();
+        resetAttachmentListCache();
         const operation = phase === "detail"
           ? fetchAttachmentList(session, config, "1234567")
           : searchNotes(session, config, "hana", 1);

@@ -288,8 +288,7 @@ async function browserOrSkip(t: { skip(message: string): void }): Promise<Browse
   catch (error) { if (process.env.CI) throw error; t.skip("Chromium cannot start in this environment"); return undefined; }
 }
 
-test("SapSession uses an injected state store without a plaintext file", async t => {
-  const browser = await browserOrSkip(t); if (!browser) return; await browser.close();
+test("SapSession uses an injected state store without a plaintext file", async () => {
   const temp = await temporary(); let saved: SessionState | undefined;
   const session = new SapSession({ ...loadConfig(), storageStatePath: join(temp.directory, "never-written.json") }, true, { load: async () => storage, save: async state => { saved = state; } });
   try {
@@ -297,8 +296,7 @@ test("SapSession uses an injected state store without a plaintext file", async t
   } finally { await session.close(); await rm(temp.directory, { recursive: true, force: true }); }
 });
 
-test("SapSession.saveState tightens a pre-existing, group-readable state directory", async t => {
-  const browser = await browserOrSkip(t); if (!browser) return; await browser.close();
+test("SapSession.saveState tightens a pre-existing, group-readable state directory", async () => {
   const temp = await temporary();
   const loose = join(temp.directory, "state"); await mkdir(loose, { mode: 0o755 }); await chmod(loose, 0o755);
   const statePath = join(loose, "session.json"); await writeFile(statePath, JSON.stringify(storage), { mode: 0o644 });
@@ -674,7 +672,7 @@ test("favorites are private, validated, deduplicated, filtered and retained acro
   } finally { await f.cleanup(); }
 });
 
-test("favorite capacity preserves existing entries and lock invalidates queued edits", async () => {
+test("favorite capacity preserves existing entries and edits do not wait on SAP", async () => {
   const f = await fixture();
   try {
     await f.request("/api/setup", "POST", { password: PASSWORD });
@@ -684,16 +682,13 @@ test("favorite capacity preserves existing entries and lock invalidates queued e
     assert.equal((await f.request("/api/favorites/9999", "PUT", input)).status, 409);
     assert.equal(f.vault.favorites.length, MAX_FAVORITES);
     assert.equal((await f.request("/api/favorites/1000", "PUT", input)).status, 200);
-    const before = f.vault.favorites;
     let release!: () => void;
     const barrier = f.service.run(() => new Promise<void>(resolve => { release = resolve; }));
     await new Promise(resolve => setTimeout(resolve, 10));
-    const pending = f.request("/api/favorites/1001", "PUT", input);
-    await new Promise(resolve => setTimeout(resolve, 20));
-    const locking = f.service.lock();
-    release(); await assert.rejects(barrier, { code: "LOCKED" }); await locking;
-    assert.equal((await pending).status, 401);
-    await f.vault.unlock(PASSWORD); assert.deepEqual(f.vault.favorites, before);
+    assert.equal((await f.request("/api/favorites/1001", "PUT", input)).status, 200);
+    assert.equal(f.vault.peekFavorites().find(entry => entry.number === "1001")?.memo, "pending secret");
+    release();
+    await barrier;
   } finally { await f.cleanup(); }
 });
 

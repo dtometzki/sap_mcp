@@ -222,7 +222,7 @@ async function readInlineText(filePath: string, totalBytes: number): Promise<{
   truncated: boolean;
 }> {
   // Four bytes per Unicode code point is enough to preserve INLINE_TEXT_LIMIT UTF-8 chars.
-  const buffer = Buffer.alloc(INLINE_TEXT_LIMIT * 4 + 4);
+  const buffer = Buffer.alloc(Math.max(1, Math.min(totalBytes, INLINE_TEXT_LIMIT * 4 + 4)));
   const handle = await open(filePath, "r");
   try {
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
@@ -292,6 +292,7 @@ function readField(source: Record<string, unknown>, keys: readonly string[]): st
 }
 
 const MAX_SCAN_DEPTH = 16;
+const ATTACHMENTS_KEY = /^attachments$/i;
 
 /**
  * Pulls attachment entries out of the note-detail JSON without depending on the exact
@@ -300,10 +301,9 @@ const MAX_SCAN_DEPTH = 16;
  * payload is scanned for objects that carry both a plausible file name and a URL.
  */
 export function extractAttachments(payload: unknown, baseUrl: string): NoteAttachment[] {
-  const fromAttachmentSubtrees = new Map<string, NoteAttachment>();
-  const fromAnywhere = new Map<string, NoteAttachment>();
+  const collected = new Map<string, NoteAttachment>();
 
-  const tryCollect = (node: Record<string, unknown>, into: Map<string, NoteAttachment>): void => {
+  const tryCollect = (node: Record<string, unknown>): void => {
     const fileName = readField(node, FILE_NAME_KEYS);
     const href = readField(node, URL_KEYS);
     if (!fileName || !href || !FILE_NAME_PATTERN.test(fileName)) return;
@@ -314,7 +314,7 @@ export function extractAttachments(payload: unknown, baseUrl: string): NoteAttac
       return;
     }
     if (!isAllowedAttachmentHost(url)) return;
-    if (into.has(url)) return;
+    if (collected.has(url)) return;
     const attachment: NoteAttachment = { fileName, url };
     // SAP's note-detail FileSize is in KB (1024 bytes), as displayed in the portal.
     // Explicit byte fields win; other API variants retain their byte semantics.
@@ -323,26 +323,30 @@ export function extractAttachments(payload: unknown, baseUrl: string): NoteAttac
     const size = Number.parseFloat(bytes || kilobytes || readField(node, SIZE_KEYS));
     const sizeBytes = Math.round(size * (!bytes && kilobytes ? 1024 : 1));
     if (Number.isSafeInteger(sizeBytes) && sizeBytes > 0) attachment.sizeBytes = sizeBytes;
-    into.set(url, attachment);
+    collected.set(url, attachment);
   };
 
-  const visit = (node: unknown, depth: number, inAttachments: boolean): void => {
+  const walk = (node: unknown, depth: number, collect: boolean, onlyFindAttachments: boolean): void => {
     if (depth > MAX_SCAN_DEPTH || node === null || typeof node !== "object") return;
     if (Array.isArray(node)) {
-      for (const child of node) visit(child, depth + 1, inAttachments);
+      for (const child of node) walk(child, depth + 1, collect, onlyFindAttachments);
       return;
     }
     const record = node as Record<string, unknown>;
-    tryCollect(record, inAttachments ? fromAttachmentSubtrees : fromAnywhere);
+    if (collect) tryCollect(record);
     for (const [key, child] of Object.entries(record)) {
-      visit(child, depth + 1, inAttachments || /^attachments$/i.test(key));
+      const attachments = ATTACHMENTS_KEY.test(key);
+      if (onlyFindAttachments && !collect) {
+        walk(child, depth + 1, attachments, !attachments);
+        continue;
+      }
+      walk(child, depth + 1, collect || attachments, onlyFindAttachments && !attachments);
     }
   };
 
-  visit(payload, 0, false);
-  return fromAttachmentSubtrees.size > 0
-    ? [...fromAttachmentSubtrees.values()]
-    : [...fromAnywhere.values()];
+  walk(payload, 0, false, true);
+  if (collected.size === 0) walk(payload, 0, true, false);
+  return [...collected.values()];
 }
 
 async function fetchAttachmentsViaApi(
@@ -445,11 +449,21 @@ async function fetchAttachmentsViaDom(
  * the note page is kept as a safety net for the portal's next frontend rewrite —
  * the same two-tier strategy the search uses (Coveo first, DOM second).
  */
+const LIST_TTL_MS = 60_000;
+const listCache = new Map<string, { at: number; items: NoteAttachment[] }>();
+
+/** Drops cached attachment lists; call with resetTokenCache when the session changes. */
+export function resetAttachmentListCache(): void {
+  listCache.clear();
+}
+
 export async function fetchAttachmentList(
   session: SapSession,
   config: Config,
   id: string,
 ): Promise<NoteAttachment[]> {
+  const cached = listCache.get(id);
+  if (cached && Date.now() - cached.at < LIST_TTL_MS) return cached.items;
   const attachments = await withDomFallback(
     `Attachment list for note ${id}`,
     "Note detail API",
@@ -457,7 +471,9 @@ export async function fetchAttachmentList(
     () => fetchAttachmentsViaDom(session, config, id),
   );
   // Both sources already filter; kept as the last line of defence before a download.
-  return attachments.filter((attachment) => isAllowedAttachmentHost(attachment.url));
+  const allowed = attachments.filter((attachment) => isAllowedAttachmentHost(attachment.url));
+  listCache.set(id, { at: Date.now(), items: allowed });
+  return allowed;
 }
 
 /** Client-facing list: names and sizes only — download URLs stay inside the process. */
@@ -518,36 +534,49 @@ export function selectAttachment(
   );
 }
 
+export async function persistAttachmentStream(
+  config: Config,
+  id: string,
+  stream: AttachmentStream,
+): Promise<AttachmentDownload> {
+  const directory = join(config.attachmentDirPath, id);
+  await ensurePrivateDirectory(directory);
+  const filePath = join(directory, sanitizeFileName(stream.fileName));
+  const response = new Response(stream.body, {
+    headers: {
+      "content-type": stream.contentType,
+      ...(stream.sizeBytes !== undefined ? { "content-length": String(stream.sizeBytes) } : {}),
+    },
+  });
+  try {
+    const bytes = await writeResponseWithLimit(response, filePath, MAX_DOWNLOAD_BYTES);
+    const result: AttachmentDownload = {
+      attachment: { fileName: stream.fileName, url: "", sizeBytes: stream.sizeBytes },
+      filePath,
+      bytes,
+      contentType: stream.contentType,
+    };
+    if (isTextAttachment(stream.fileName, stream.contentType)) {
+      const inline = await readInlineText(filePath, bytes);
+      result.text = inline.text;
+      result.textTruncated = inline.truncated;
+    }
+    return result;
+  } finally {
+    await stream.body.cancel().catch(() => undefined);
+  }
+}
+
 export async function downloadAttachment(
   session: SapSession,
   config: Config,
   id: string,
   fileName: string | undefined,
 ): Promise<AttachmentDownload> {
-  const attachments = await fetchAttachmentList(session, config, id);
-  const attachment = selectAttachment(attachments, id, fileName);
-  if (!isAllowedAttachmentHost(attachment.url)) {
-    throw new PublicError("Refusing to download from non-SAP host.");
-  }
-
-  return withRetry(async () => {
-    // apiTimeoutMs bounds the time between two chunks, not the whole transfer.
-    const watchdog = inactivityWatchdog(config.apiTimeoutMs);
-    try {
-      return await transferAttachment(session, config, id, attachment, watchdog);
-    } catch (error) {
-      if (watchdog.signal.aborted) {
-        // "ETIMEDOUT" keeps the error transient for withRetry.
-        throw new PublicError(
-          `Attachment download ETIMEDOUT: no data received for ${config.apiTimeoutMs} ms.`,
-          { cause: error },
-        );
-      }
-      throw error;
-    } finally {
-      watchdog.clear();
-    }
-  });
+  // Open (list + headers) may retry; once bytes flow the queue is already released
+  // and a retry would restart a 100 MB transfer from zero.
+  const stream = await openAttachmentStream(session, config, id, fileName, new AbortController().signal);
+  return persistAttachmentStream(config, id, stream);
 }
 
 /** Headers plus a live body; the SAP queue is released before the caller drains the stream. */
@@ -614,7 +643,7 @@ export async function openAttachmentStream(
   session: SapSession,
   config: Config,
   id: string,
-  fileName: string,
+  fileName: string | undefined,
   signal: AbortSignal,
 ): Promise<AttachmentStream> {
   const attachments = await fetchAttachmentList(session, config, id);
@@ -652,55 +681,6 @@ export async function openAttachmentStream(
       throw error;
     }
   });
-}
-
-async function transferAttachment(
-  session: SapSession,
-  config: Config,
-  id: string,
-  attachment: NoteAttachment,
-  watchdog: DownloadWatchdog,
-): Promise<AttachmentDownload> {
-  const response = await fetchAllowedAttachment(
-    attachment.url,
-    (url) =>
-      isTrustedAttachmentCookieHost(url, config.attachmentCookieHosts)
-        ? session.cookieHeader(url)
-        : Promise.resolve(""),
-    watchdog.signal,
-  );
-  watchdog.touch();
-
-  try {
-    const contentType = response.headers.get("content-type") ?? "";
-    assertUsableAttachmentResponse(
-      response.status,
-      response.url,
-      response.ok,
-      contentType,
-      attachment.fileName,
-    );
-
-    const directory = join(config.attachmentDirPath, id);
-    await ensurePrivateDirectory(directory);
-    const filePath = join(directory, sanitizeFileName(attachment.fileName));
-    const bytes = await writeResponseWithLimit(response, filePath, MAX_DOWNLOAD_BYTES, watchdog);
-
-    const result: AttachmentDownload = {
-      attachment,
-      filePath,
-      bytes,
-      contentType,
-    };
-    if (isTextAttachment(attachment.fileName, contentType)) {
-      const inline = await readInlineText(filePath, bytes);
-      result.text = inline.text;
-      result.textTruncated = inline.truncated;
-    }
-    return result;
-  } finally {
-    await response.body?.cancel().catch(() => undefined);
-  }
 }
 
 /** Rejects login/error pages before they can be persisted as an attachment. */

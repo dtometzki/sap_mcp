@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { PublicError, safeErrorMessage } from "./errors.js";
 import { rejectApiRedirect } from "./api.js";
-import { extractNoteDocument, noteHtmlToMarkdown } from "./noteContent.js";
+import { extractNoteDocument, noteDocumentIsReady, noteHtmlToMarkdown } from "./noteContent.js";
 import type { Page } from "playwright";
 import { z } from "zod";
 import { buildUrl, type Config } from "./config.js";
@@ -141,18 +141,19 @@ export function searchNotes(
  * API failure is a broken backend, not "no results": reporting [] would turn it into a
  * confident "nothing found" answer. Only a fixed diagnostic category reaches stderr.
  */
-export async function withDomFallback<T>(
+export async function withPortalFallback<T>(
   subject: string,
   primaryName: string,
-  primary: () => Promise<T[]>,
-  fallback: () => Promise<T[]>,
-): Promise<T[]> {
+  primary: () => Promise<T>,
+  fallback: () => Promise<T>,
+  isEmpty: (value: T) => boolean,
+): Promise<T> {
   try {
     return await primary();
   } catch (error) {
     if (error instanceof SessionExpiredError || error instanceof AccessDeniedError) throw error;
     console.error(`${primaryName} failed, falling back to DOM scrape: ${errorMessage(error)}`);
-    let results: T[];
+    let results: T;
     try {
       results = await fallback();
     } catch (fallbackError) {
@@ -164,7 +165,7 @@ export async function withDomFallback<T>(
         { cause: error },
       );
     }
-    if (results.length === 0) {
+    if (isEmpty(results)) {
       throw new PublicError(
         `${subject} failed: ${errorMessage(error)} (the DOM fallback found nothing either)`,
         { cause: error },
@@ -172,6 +173,15 @@ export async function withDomFallback<T>(
     }
     return results;
   }
+}
+
+export async function withDomFallback<T>(
+  subject: string,
+  primaryName: string,
+  primary: () => Promise<T[]>,
+  fallback: () => Promise<T[]>,
+): Promise<T[]> {
+  return withPortalFallback(subject, primaryName, primary, fallback, (results) => results.length === 0);
 }
 
 /** Coveo returns fields as either a scalar or a single-element array; normalise to a string. */
@@ -321,6 +331,7 @@ async function postCoveoSearch(
   token: string,
   query: string,
   firstResult: number,
+  pageSize: number,
 ): Promise<CoveoResponse> {
   assertAllowedApiUrl(config.coveoSearchUrl, "Coveo search request");
   const response = await session.request().post(config.coveoSearchUrl, {
@@ -334,8 +345,9 @@ async function postCoveoSearch(
       tab: "All",
       sortCriteria: "relevancy",
       // Over-fetch and paginate because Coveo also returns blogs and documentation.
-      numberOfResults: COVEO_PAGE_SIZE,
+      numberOfResults: pageSize,
       firstResult,
+      excerptLength: 0,
       fieldsToInclude: ["mh_id", "source", "mh_alt_url", "objecttype", "documenttype", "language"],
     },
   });
@@ -363,12 +375,13 @@ async function searchNotesViaCoveo(
   let token = await withRetry(() => fetchCoveoToken(session, config));
   let tokenRenewed = false;
   const hits = new Map<string, NoteHit>();
+  const pageSize = Math.min(COVEO_PAGE_SIZE, Math.max(limit * 3, 15));
 
   for (let pageIndex = 0; pageIndex < MAX_COVEO_PAGES && hits.size < limit; pageIndex += 1) {
-    const firstResult = pageIndex * COVEO_PAGE_SIZE;
+    const firstResult = pageIndex * pageSize;
     let body: CoveoResponse;
     try {
-      body = await withRetry(() => postCoveoSearch(session, config, token, query, firstResult));
+      body = await withRetry(() => postCoveoSearch(session, config, token, query, firstResult, pageSize));
     } catch (error) {
       // A rejected token is fetched fresh exactly once per search; a second rejection
       // means the session (not the token) is the problem and is reported as-is.
@@ -376,7 +389,7 @@ async function searchNotesViaCoveo(
       tokenRenewed = true;
       resetTokenCache();
       token = await withRetry(() => fetchCoveoToken(session, config));
-      body = await withRetry(() => postCoveoSearch(session, config, token, query, firstResult));
+      body = await withRetry(() => postCoveoSearch(session, config, token, query, firstResult, pageSize));
     }
 
     for (const result of body.results) {
@@ -396,7 +409,7 @@ async function searchNotesViaCoveo(
       );
     }
 
-    const exhaustedResults = body.results.length < COVEO_PAGE_SIZE;
+    const exhaustedResults = body.results.length < pageSize;
     const reachedTotal =
       body.totalCount !== undefined && firstResult + body.results.length >= body.totalCount;
     if (exhaustedResults || reachedTotal) break;
@@ -415,41 +428,132 @@ export async function searchNotesViaDom(
   return session.withOpenPage(url, (page) => collectHits(page, limit, config.noteUrlTemplate));
 }
 
+const NOTE_BODY_KEYS = /^(html|longtext|notetext|body|content|symptom|solution|cause|reason)$/i;
+
+/**
+ * Pulls title + HTML/text sections out of the note-detail JSON without depending on
+ * the exact envelope. Missing or tiny bodies return undefined so fetchNote falls
+ * through to the rendered page.
+ */
+export function extractNoteFromDetail(payload: unknown, id: string): { title: string; html: string } | undefined {
+  const htmlParts: string[] = [];
+  let title = "";
+  const unwrap = (value: unknown): string => {
+    if (value !== null && typeof value === "object" && !Array.isArray(value) && "value" in value) {
+      return coerceField(value.value);
+    }
+    return coerceField(value);
+  };
+  const visit = (node: unknown, depth: number): void => {
+    if (depth > 16 || node === null || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      for (const child of node) visit(child, depth + 1);
+      return;
+    }
+    const record = node as Record<string, unknown>;
+    for (const [key, child] of Object.entries(record)) {
+      if (/^attachments$/i.test(key)) continue;
+      if (!title && /^(title|notetitle)$/i.test(key)) {
+        const value = unwrap(child).replace(/^\d{4,10}\s*[-–—:]\s*/, "").replace(/\s*[-|]\s*SAP.*$/i, "").trim();
+        if (value) title = value;
+      }
+      if (NOTE_BODY_KEYS.test(key)) {
+        const value = unwrap(child).trim();
+        if (value.length >= 20) htmlParts.push(value);
+        continue;
+      }
+      visit(child, depth + 1);
+    }
+  };
+  visit(payload, 0);
+  const html = htmlParts.join("\n");
+  if (html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().length < 50) return undefined;
+  return { title: title || `SAP Note ${id}`, html };
+}
+
+async function fetchNoteViaApi(
+  session: SapSession,
+  config: Config,
+  id: string,
+  url: string,
+): Promise<NoteDetail> {
+  const apiUrl = buildUrl(config.noteDetailApiUrlTemplate, { id });
+  assertAllowedApiUrl(apiUrl, "Note detail request");
+  const response = await session.request().get(apiUrl, {
+    headers: { accept: "application/json" },
+    timeout: config.apiTimeoutMs,
+    maxRedirects: 0,
+  });
+  try {
+    rejectApiRedirect(response);
+    if (response.url() && !isAllowedApiUrl(response.url())) {
+      throw new PublicError("Refusing note detail response from non-SAP host.");
+    }
+    assertNotLoggedOut(response.status(), response.url(), `Note ${id}`, response.ok());
+    if (!response.ok()) throw new PublicError(`Note detail request failed: HTTP ${response.status()}`);
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      const contentType = response.headers()["content-type"] ?? "";
+      if (/text\/html/i.test(contentType) || looksLikeLoginPage(response.url())) throw new SessionExpiredError();
+      throw new PublicError("Note detail endpoint returned invalid JSON.");
+    }
+    const extracted = extractNoteFromDetail(payload, id);
+    if (!extracted) throw new PublicError(`Note ${id} detail API returned no document body.`);
+    const markdown = noteHtmlToMarkdown(extracted.html);
+    if (markdown.length < 50) throw new PublicError(`Note ${id} detail API returned no readable content.`);
+    return { id, title: extracted.title, url, markdown };
+  } finally {
+    await response.dispose().catch(() => undefined);
+  }
+}
+
+async function fetchNoteViaPage(
+  session: SapSession,
+  config: Config,
+  id: string,
+  url: string,
+): Promise<NoteDetail> {
+  const { html, title: rawTitle } = await session.withOpenPage(url, async (page) => {
+    // SAP renders its navigation before the document. Wait for real note sections
+    // without cloning the DOM on every poll.
+    await page.waitForFunction(noteDocumentIsReady, id, {
+      timeout: config.navigationTimeoutMs,
+      polling: 200,
+    }).catch(() => {
+      if (looksLikeLoginPage(page.url())) throw new SessionExpiredError();
+      throw new PublicError(
+        `Note ${id} returned no readable document sections. The portal may still be ` +
+        "loading, access may be restricted, or the document layout has changed.",
+      );
+    });
+    const html = (await page.evaluate(extractNoteDocument, id)) ?? "";
+    const title = await page.title();
+    return { html, title };
+  });
+  const markdown = noteHtmlToMarkdown(html);
+  if (markdown.length < 50) {
+    throw new PublicError(
+      `Note ${id} returned no readable content. The note may not exist, may be ` +
+        `restricted for your S-user, or the portal layout changed (adjust SAP_NOTE_URL).`,
+    );
+  }
+  const title = rawTitle.replace(/\s*[-|]\s*SAP.*$/i, "").replace(/^\d{4,10}\s*[-–—:]\s*/, "").trim() || `SAP Note ${id}`;
+  return { id, title, url, markdown };
+}
+
 export async function fetchNote(
   session: SapSession,
   config: Config,
   id: string,
 ): Promise<NoteDetail> {
   const url = buildUrl(config.noteUrlTemplate, { id });
-  return withRetry(async () =>
-    session.withOpenPage(url, async (page) => {
-      // SAP renders its navigation before the document. Wait for real note sections.
-      const handle = await page.waitForFunction(extractNoteDocument, id, {
-        timeout: config.navigationTimeoutMs,
-        polling: 200,
-      }).catch(() => {
-        if (looksLikeLoginPage(page.url())) throw new SessionExpiredError();
-        throw new PublicError(
-          `Note ${id} returned no readable document sections. The portal may still be ` +
-          "loading, access may be restricted, or the document layout has changed.",
-        );
-      });
-      let html: string;
-      try { html = (await handle.jsonValue()) ?? ""; }
-      finally { await handle.dispose(); }
-      const markdown = noteHtmlToMarkdown(html);
-
-      if (markdown.length < 50) {
-        throw new PublicError(
-          `Note ${id} returned no readable content. The note may not exist, may be ` +
-            `restricted for your S-user, or the portal layout changed (adjust SAP_NOTE_URL).`,
-        );
-      }
-
-      const rawTitle = await page.title();
-      const title = rawTitle.replace(/\s*[-|]\s*SAP.*$/i, "").replace(/^\d{4,10}\s*[-–—:]\s*/, "").trim() || `SAP Note ${id}`;
-
-      return { id, title, url, markdown };
-    }),
+  return withPortalFallback(
+    `Note ${id}`,
+    "Note detail API",
+    () => withRetry(() => fetchNoteViaApi(session, config, id, url)),
+    () => withRetry(() => fetchNoteViaPage(session, config, id, url)),
+    (note) => note.markdown.length < 50,
   );
 }
